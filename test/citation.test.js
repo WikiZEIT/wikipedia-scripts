@@ -1297,3 +1297,212 @@ describe('settings persistence', () => {
         expect(api.loadSetting('broken', 'fallback')).toBe('fallback');
     });
 });
+
+// =========================================================================
+//  refName
+// =========================================================================
+describe('refName', () => {
+    it('builds Surname_Year format', () => {
+        expect(api.refName({ nazwisko: 'Kowalski', rok: '2020' })).toBe('Kowalski_2020');
+    });
+
+    it('uses data as fallback for year', () => {
+        expect(api.refName({ nazwisko: 'Woś', data: '2023' })).toBe('Woś_2023');
+    });
+
+    it('joins multiple surnames with underscore', () => {
+        expect(api.refName({ nazwisko: 'Kowalski', nazwisko2: 'Nowak', rok: '2020' })).toBe('Kowalski_Nowak_2020');
+    });
+
+    it('falls back to nazwisko r when no nazwisko', () => {
+        expect(api.refName({ 'nazwisko r': 'Herbst', data: '1973' })).toBe('Herbst_1973');
+    });
+
+    it('prefers nazwisko over nazwisko r (bibliography author wins)', () => {
+        expect(api.refName({ nazwisko: 'Wimmer (red.)', 'nazwisko r': 'Herbst', data: '1973' })).toBe('Wimmer_red_1973');
+    });
+
+    it('appends variant letter from odn (a/b/c) to year', () => {
+        expect(api.refName({ nazwisko: 'Kowalski', rok: '2020', odn: 'a' })).toBe('Kowalski_2020a');
+    });
+
+    it('handles _positional identifiers', () => {
+        expect(api.refName({ _positional: ['Wimmer2018', 'rozdz. 3'] })).toBe('Wimmer2018_rozdz_3');
+    });
+});
+
+// =========================================================================
+//  buildSubRefString
+// =========================================================================
+describe('buildSubRefString', () => {
+    it('builds a self-closing <ref name="X" details="s. N" /> when page given', () => {
+        const book = { nazwisko: 'Kowalski', rok: '2020' };
+        expect(api.buildSubRefString(book, '42')).toBe('<ref name="Kowalski_2020" details="s. 42" />');
+    });
+
+    it('omits details when no page given', () => {
+        const book = { nazwisko: 'Kowalski', rok: '2020' };
+        expect(api.buildSubRefString(book)).toBe('<ref name="Kowalski_2020" />');
+    });
+});
+
+// =========================================================================
+//  buildReferencesBlock
+// =========================================================================
+describe('buildReferencesBlock', () => {
+    it('wraps each book in <ref name="X">{{Cytuj...}}</ref> inside <references>', () => {
+        const books = [
+            { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', rok: '2020' },
+            { _templateName: 'Cytuj książkę', nazwisko: 'Nowak', rok: '2019' }
+        ];
+        const result = api.buildReferencesBlock(books);
+        expect(result).toBe(
+            '<references>\n' +
+            '<ref name="Kowalski_2020">{{Cytuj książkę |nazwisko=Kowalski |rok=2020}}</ref>\n' +
+            '<ref name="Nowak_2019">{{Cytuj książkę |nazwisko=Nowak |rok=2019}}</ref>\n' +
+            '</references>'
+        );
+    });
+
+    it('produces an empty references block for no books', () => {
+        expect(api.buildReferencesBlock([])).toBe('<references>\n</references>');
+    });
+
+    it('strips _refName from the inner template (it is the wrapper attribute)', () => {
+        const books = [{ _templateName: 'Cytuj książkę', _refName: 'X', nazwisko: 'A', rok: '2020' }];
+        const result = api.buildReferencesBlock(books);
+        expect(result).not.toContain('_refName');
+        expect(result).toContain('<ref name="A_2020">{{Cytuj książkę |nazwisko=A |rok=2020}}</ref>');
+    });
+});
+
+// =========================================================================
+//  parseSubReferences
+// =========================================================================
+describe('parseSubReferences', () => {
+    it('extracts books from <references><ref>{{Cytuj...}}</ref></references>', () => {
+        const source = '== Przypisy ==\n<references>\n<ref name="K_2020">{{Cytuj książkę |nazwisko=Kowalski |rok=2020}}</ref>\n<ref name="N_2019">{{Cytuj książkę |nazwisko=Nowak |rok=2019}}</ref>\n</references>\n';
+        const books = api.parseSubReferences(source);
+        expect(books).toHaveLength(2);
+        expect(books[0].nazwisko).toBe('Kowalski');
+        expect(books[0]._refName).toBe('K_2020');
+        expect(books[1].nazwisko).toBe('Nowak');
+        expect(books[1]._refName).toBe('N_2019');
+    });
+
+    it('returns empty array when no <references> block exists', () => {
+        expect(api.parseSubReferences('Just text.')).toEqual([]);
+    });
+
+    it('returns empty array for self-closing <references />', () => {
+        expect(api.parseSubReferences('<references />')).toEqual([]);
+    });
+
+    it('skips refs without {{Cytuj...}} content (plain refs)', () => {
+        const source = '<references>\n<ref name="foo">Just a note</ref>\n<ref name="bar">{{Cytuj książkę |nazwisko=X |rok=2020}}</ref>\n</references>';
+        const books = api.parseSubReferences(source);
+        expect(books).toHaveLength(1);
+        expect(books[0].nazwisko).toBe('X');
+    });
+});
+
+// =========================================================================
+//  insertReferencesSection (sub-ref mode)
+// =========================================================================
+describe('insertReferencesSection', () => {
+    const books = [{ _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', rok: '2020' }];
+
+    it('replaces an existing <references> block', () => {
+        const source = '== Przypisy ==\n<references>\n<ref name="Old_1990">{{Cytuj książkę |nazwisko=Old |rok=1990}}</ref>\n</references>\n';
+        const result = api.insertReferencesSection(source, books);
+        expect(result).toContain('<ref name="Kowalski_2020">');
+        expect(result).not.toContain('nazwisko=Old');
+        expect(result.match(/<references>/g)).toHaveLength(1);
+    });
+
+    it('replaces self-closing <references /> with a full block', () => {
+        const source = '== Przypisy ==\n<references />\n';
+        const result = api.insertReferencesSection(source, books);
+        expect(result).toContain('<references>');
+        expect(result).toContain('<ref name="Kowalski_2020">');
+        expect(result).toContain('</references>');
+        expect(result).not.toContain('<references />');
+    });
+
+    it('replaces {{Przypisy}} template with a <references> block', () => {
+        const source = '== Przypisy ==\n{{Przypisy}}\n';
+        const result = api.insertReferencesSection(source, books);
+        expect(result).toContain('<references>');
+        expect(result).toContain('<ref name="Kowalski_2020">');
+        expect(result).not.toContain('{{Przypisy}}');
+    });
+
+    it('creates a new == Przypisy == section when none exists', () => {
+        const source = 'Article body.\n';
+        const result = api.insertReferencesSection(source, books);
+        expect(result).toContain('== Przypisy ==');
+        expect(result).toContain('<references>');
+        expect(result).toContain('<ref name="Kowalski_2020">');
+    });
+
+    it('removes a legacy == Bibliografia == section when migrating to sub-ref mode', () => {
+        const source = 'Body.\n\n== Przypisy ==\n{{Przypisy}}\n\n== Bibliografia ==\n* {{Cytuj książkę |nazwisko=Old |rok=2000 |odn=tak}}\n';
+        const result = api.insertReferencesSection(source, books);
+        expect(result).not.toContain('== Bibliografia ==');
+        expect(result).toContain('<references>');
+        expect(result).toContain('<ref name="Kowalski_2020">');
+    });
+
+    it('uses level 3 when inside a discussion thread (section-edit mode)', () => {
+        const source = '== Thread ==\nDiscussion.\n';
+        const result = api.insertReferencesSection(source, books);
+        expect(result).toContain('=== Przypisy ===');
+        expect(result).toContain('<references>');
+    });
+});
+
+// =========================================================================
+//  migrateOdnToSubRefs (inline migration from {{odn|...}} to <ref ... />)
+// =========================================================================
+describe('migrateOdnToSubRefs', () => {
+    it('converts {{odn|Surname|Year}} to a self-closing <ref name="Surname_Year" />', () => {
+        const source = 'Tekst{{odn|Kowalski|2020}}.';
+        const result = api.migrateOdnToSubRefs(source);
+        expect(result).toBe('Tekst<ref name="Kowalski_2020" />.');
+    });
+
+    it('converts {{odn|Surname|Year|s=N}} to <ref name="..." details="s. N" />', () => {
+        const source = 'Tekst{{odn|Nowak|2019|s=5}}.';
+        const result = api.migrateOdnToSubRefs(source);
+        expect(result).toBe('Tekst<ref name="Nowak_2019" details="s. 5" />.');
+    });
+
+    it('handles multiple authors in odn', () => {
+        const source = 'X{{odn|Kowalski|Nowak|2020|s=42}}.';
+        expect(api.migrateOdnToSubRefs(source))
+            .toBe('X<ref name="Kowalski_Nowak_2020" details="s. 42" />.');
+    });
+
+    it('handles odn with variant year (2020a)', () => {
+        const source = 'Y{{odn|Kowalski|2020a|s=12}}.';
+        expect(api.migrateOdnToSubRefs(source))
+            .toBe('Y<ref name="Kowalski_2020a" details="s. 12" />.');
+    });
+
+    it('migrates every occurrence in the source', () => {
+        const source = '{{odn|A|2020}} oraz {{odn|B|2021|s=7}}.';
+        const result = api.migrateOdnToSubRefs(source);
+        expect(result).toBe('<ref name="A_2020" /> oraz <ref name="B_2021" details="s. 7" />.');
+    });
+
+    it('preserves text without odn templates unchanged', () => {
+        const source = 'Plain text with <ref name="x">Note</ref>.';
+        expect(api.migrateOdnToSubRefs(source)).toBe(source);
+    });
+
+    it('sanitizes special characters in the ref name (spaces, punctuation)', () => {
+        const source = 'Y{{odn|Wimmer (red.)|1973|s=5}}.';
+        expect(api.migrateOdnToSubRefs(source))
+            .toBe('Y<ref name="Wimmer_red_1973" details="s. 5" />.');
+    });
+});

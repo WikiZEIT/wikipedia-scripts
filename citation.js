@@ -14,7 +14,7 @@
  * strona wkazywana w page, powinna zawierać ksiązki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-06-23 22:57:41+0200
+ * @date 2026-06-23 23:10:57+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
@@ -89,7 +89,7 @@
             this.setActive(false);
             var surface = ve.init.target.getSurface();
             getPageWikitext(surface).then(function (source) {
-                var result = parseExistingBibliography(source);
+                var result = readAllBibliography(source);
                 windowManager.openWindow(bibDialog, {
                     surface: surface,
                     existingMain: result.main,
@@ -113,7 +113,7 @@
             var fragment = surfaceModel.getFragment();
             surface.getView().deactivate(false);
             getPageWikitext(surface).then(function (source) {
-                var result = parseExistingBibliography(source);
+                var result = readAllBibliography(source);
                 var pageBooks = result.main.concat(result.nested);
                 var instance = windowManager.openWindow(odnDialog, { surface: surface, books: pageBooks, fragment: fragment });
                 instance.closed.then(function () {
@@ -191,7 +191,7 @@
             newIcon: 'https://upload.wikimedia.org/wikipedia/commons/6/60/OOjs_UI_icon_references-ltr.svg',
             onclick: function () {
                 var source = $textbox.textSelection('getContents');
-                var result = parseExistingBibliography(source);
+                var result = readAllBibliography(source);
                 windowManager.openWindow(bibDialog, {
                     surface: null,
                     existingMain: result.main,
@@ -208,7 +208,7 @@
             newIcon: 'https://upload.wikimedia.org/wikipedia/commons/c/c0/OOjs_UI_icon_quotes-ltr.svg',
             onclick: function () {
                 var source = $textbox.textSelection('getContents');
-                var result = parseExistingBibliography(source);
+                var result = readAllBibliography(source);
                 var pageBooks = result.main.concat(result.nested);
                 windowManager.openWindow(odnDialog, {
                     surface: null,
@@ -225,7 +225,12 @@
     function updateBibliographyWikiEditor(mainBooks) {
         var $textbox = $('#wpTextbox1');
         var source = $textbox.textSelection('getContents');
-        var newSource = insertBibliographySection(source, buildBibEntries(mainBooks));
+        var newSource;
+        if (loadSetting('podprzypisy', false)) {
+            newSource = insertReferencesSection(migrateOdnToSubRefs(source), mainBooks);
+        } else {
+            newSource = insertBibliographySection(source, buildBibEntries(mainBooks));
+        }
 
         if (newSource !== source) {
             var scrollTop = $textbox.scrollTop();
@@ -240,9 +245,33 @@
         }
     }
 
+    function buildReferenceString(book, page) {
+        return loadSetting('podprzypisy', false)
+            ? buildSubRefString(book, page)
+            : buildOdnString(book, page);
+    }
+
+    function readAllBibliography(source) {
+        var legacy = parseExistingBibliography(source);
+        var subref = parseSubReferences(source);
+        var seen = {};
+        var main = [];
+        // Wpisy sub-ref mają pierwszeństwo (są w nowym formacie); duplikaty
+        // dedupujemy po kluczu książki, żeby migracja z odn nie pokazała
+        // tej samej książki dwa razy.
+        subref.concat(legacy.main).forEach(function (b) {
+            var k = bookKey(b);
+            if (!seen[k]) {
+                seen[k] = true;
+                main.push(b);
+            }
+        });
+        return { main: main, nested: legacy.nested };
+    }
+
     function insertOdnWikiEditor(book, page) {
         var $textbox = $('#wpTextbox1');
-        $textbox.textSelection('replaceSelection', buildOdnString(book, page));
+        $textbox.textSelection('replaceSelection', buildReferenceString(book, page));
     }
 
     // =========================================================================
@@ -289,12 +318,25 @@
                 align: 'inline'
             });
             sortField.$element.css({ padding: 0, margin: 0 });
+
+            this.podprzypisyCheckbox = new OO.ui.CheckboxInputWidget({
+                selected: loadSetting('podprzypisy', false)
+            });
+            this.podprzypisyCheckbox.on('change', function (selected) {
+                saveSetting('podprzypisy', selected);
+            });
+            var podField = new OO.ui.FieldLayout(this.podprzypisyCheckbox, {
+                label: 'Podprzypisy (sub-references, zamiast {{odn}})',
+                align: 'inline'
+            });
+            podField.$element.css({ padding: 0, margin: 0 });
+
             this.$options = $('<div>').css({
                 'margin-top': '0.5em',
                 'padding-top': '0.5em',
                 'border-top': '1px solid #c8ccd1'
             });
-            this.$options.append(sortField.$element);
+            this.$options.append(sortField.$element, podField.$element);
 
             this.panel.$element.append(
                 this.filterInput.$element,
@@ -867,6 +909,13 @@
     }
 
     /* v8 ignore start -- GUI content manipulation */
+    function buildNewSourceForBooks(source, mainBooks) {
+        if (loadSetting('podprzypisy', false)) {
+            return insertReferencesSection(migrateOdnToSubRefs(source), mainBooks);
+        }
+        return insertBibliographySection(source, buildBibEntries(mainBooks));
+    }
+
     function updateBibliography(surface, mainBooks) {
         if (surface.getMode() !== 'source') {
             mw.notify('Edycja bibliografii dostępna tylko w edytorze źródłowym.');
@@ -876,7 +925,7 @@
         var source = surfaceModel.getDom();
         if (typeof source !== 'string' || !source) return;
 
-        var newSource = insertBibliographySection(source, buildBibEntries(mainBooks));
+        var newSource = buildNewSourceForBooks(source, mainBooks);
 
         if (newSource !== source) {
             var view = surface.getView();
@@ -899,7 +948,7 @@
     }
 
     function insertOdn(fragment, book, page) {
-        var odn = buildOdnString(book, page);
+        var odn = buildReferenceString(book, page);
         var endPos = fragment.getSelection().getRange().from + odn.length;
 
         if (codeMirror && codeMirror.isActive) {
@@ -1068,6 +1117,169 @@
         } catch (e) {
             // localStorage może być niedostępny (tryb prywatny, brak miejsca)
         }
+    }
+
+    // -------------------------------------------------------------------------
+    //  Podprzypisy (sub-references) — natywna alternatywa dla {{odn|...}}
+    // -------------------------------------------------------------------------
+    function sanitizeRefName(s) {
+        return String(s)
+            .replace(/[^\p{L}\p{N}]+/gu, '_')
+            .replace(/_+/g, '_')
+            .replace(/^_+|_+$/g, '');
+    }
+
+    function refName(book) {
+        if (book._positional) {
+            return sanitizeRefName(book._positional.join('_'));
+        }
+        var nKeys = Object.keys(book).filter(function (k) {
+            return k.indexOf('nazwisko') === 0 && !/^nazwisko r/.test(k);
+        }).sort();
+        if (!nKeys.length) {
+            nKeys = Object.keys(book).filter(function (k) {
+                return /^nazwisko r/.test(k);
+            }).sort();
+        }
+        var parts = nKeys.map(function (k) { return book[k]; });
+        var year = book.rok || book.data || '';
+        if (year) {
+            var odn = book.odn || '';
+            if (odn && odn !== 'tak' && /^[a-z]$/i.test(odn)) {
+                year += odn;
+            }
+            parts.push(year);
+        }
+        return sanitizeRefName(parts.join('_'));
+    }
+
+    function buildSubRefString(book, page) {
+        var name = refName(book);
+        if (!page) {
+            return '<ref name="' + name + '" />';
+        }
+        return '<ref name="' + name + '" details="s. ' + page + '" />';
+    }
+
+    function buildReferencesBlock(books) {
+        var lines = books.map(function (book) {
+            var tplName = book._templateName || 'Cytuj książkę';
+            // odn/_refName są metadanymi gadżetu, nie chcemy ich w wyjściu
+            var clone = {};
+            Object.keys(book).forEach(function (k) {
+                if (k === 'odn' || k === '_refName') return;
+                clone[k] = book[k];
+            });
+            return '<ref name="' + refName(book) + '">' + stringifyTemplate(tplName, clone) + '</ref>';
+        });
+        return '<references>\n' + lines.join('\n') + (lines.length ? '\n' : '') + '</references>';
+    }
+
+    function parseSubReferences(source) {
+        if (typeof source !== 'string') return [];
+        var blockRe = /<references\b[^>]*>([\s\S]*?)<\/references>/i;
+        var blockMatch = source.match(blockRe);
+        if (!blockMatch) return [];
+        var content = blockMatch[1];
+        var refRe = /<ref\b[^>]*\bname\s*=\s*"([^"]+)"[^>]*>([\s\S]*?)<\/ref>/gi;
+        var books = [];
+        var m;
+        while ((m = refRe.exec(content)) !== null) {
+            var name = m[1];
+            var inner = m[2];
+            matchCytujTemplates(inner).forEach(function (tpl) {
+                var book = parseTemplate(tpl);
+                book._refName = name;
+                books.push(book);
+            });
+        }
+        return books;
+    }
+
+    function removeBibliographySection(source) {
+        var bib = findBibliography(source);
+        if (!bib) return source;
+        // Usuń całą sekcję: nagłówek + zawartość + ewentualną pustą linię przed/po.
+        var before = source.slice(0, bib.headerStart).replace(/\s+$/, '');
+        var after = source.slice(bib.contentEnd).replace(/^\s+/, '\n');
+        return before + (after.startsWith('\n') ? '\n' + after : after);
+    }
+
+    function insertReferencesSection(source, books) {
+        var lines = books.map(function (book) {
+            var tplName = book._templateName || 'Cytuj książkę';
+            var clone = {};
+            Object.keys(book).forEach(function (k) {
+                if (k === 'odn' || k === '_refName') return;
+                clone[k] = book[k];
+            });
+            return '<ref name="' + refName(book) + '">' + stringifyTemplate(tplName, clone) + '</ref>';
+        });
+        var block = '<references>\n' + lines.join('\n') + (lines.length ? '\n' : '') + '</references>';
+
+        // Najpierw zdejmij ewentualną starą sekcję Bibliografia (migracja z odn).
+        source = removeBibliographySection(source);
+
+        // 1) Istniejący blok <references>...</references>.
+        var blockRe = /<references\b[^/>]*>[\s\S]*?<\/references>/i;
+        if (blockRe.test(source)) {
+            return source.replace(blockRe, block);
+        }
+        // 2) Samo-zamykające <references />.
+        var selfClosingRe = /<references\b[^/>]*\/>/i;
+        if (selfClosingRe.test(source)) {
+            return source.replace(selfClosingRe, block);
+        }
+        // 3) Szablon {{Przypisy}}.
+        var przypTplRe = /\{\{[Pp]rzypisy\s*\}\}/;
+        if (przypTplRe.test(source)) {
+            return source.replace(przypTplRe, block);
+        }
+        // 4) Sekcja Przypisy bez {{Przypisy}}/referencji — wstaw blok w środku.
+        var sectionRe = /(={2,3})\s*Przypisy\s*\1\n/;
+        var sectionMatch = sectionRe.exec(source);
+        if (sectionMatch) {
+            var contentStart = sectionMatch.index + sectionMatch[0].length;
+            var endRe = new RegExp('\\n={2,' + sectionMatch[1].length + '}[^=]');
+            var rest = source.slice(contentStart);
+            var endMatch = endRe.exec(rest);
+            var contentEnd = endMatch ? contentStart + endMatch.index : source.length;
+            return source.slice(0, contentStart) + block + '\n' + source.slice(contentEnd);
+        }
+        // 5) Brak sekcji — utwórz nową == Przypisy ==.
+        var insertLevel = detectInsertLevel(source);
+        var marker = insertLevel === 3 ? '===' : '==';
+        var section = marker + ' Przypisy ' + marker + '\n' + block + '\n';
+        var pos = findEndOfArticlePos(source);
+        if (pos !== -1) {
+            var head = source.slice(0, pos).replace(/\s+$/, '');
+            var tail = source.slice(pos).replace(/^\s+/, '');
+            return head + '\n\n' + section + '\n' + tail;
+        }
+        return source.replace(/\s+$/, '') + '\n\n' + section;
+    }
+
+    function migrateOdnToSubRefs(source) {
+        if (typeof source !== 'string') return source;
+        return source.replace(/\{\{odn\b([^}]*)\}\}/g, function (full, paramsStr) {
+            var params = splitTemplateParams(paramsStr.replace(/^\|/, ''));
+            var positional = [];
+            var named = {};
+            params.forEach(function (p) {
+                var eq = p.indexOf('=');
+                if (eq === -1) {
+                    positional.push(p.trim());
+                } else {
+                    named[p.slice(0, eq).trim()] = p.slice(eq + 1).trim();
+                }
+            });
+            var name = sanitizeRefName(positional.join('_'));
+            if (!name) return full; // nic do migracji
+            var page = named.s || '';
+            return page
+                ? '<ref name="' + name + '" details="s. ' + page + '" />'
+                : '<ref name="' + name + '" />';
+        });
     }
 
     function findDifferingFields(books) {
@@ -1323,6 +1535,12 @@
         sortKey: sortKey,
         sortBooks: sortBooks,
         loadSetting: loadSetting,
-        saveSetting: saveSetting
+        saveSetting: saveSetting,
+        refName: refName,
+        buildSubRefString: buildSubRefString,
+        buildReferencesBlock: buildReferencesBlock,
+        parseSubReferences: parseSubReferences,
+        insertReferencesSection: insertReferencesSection,
+        migrateOdnToSubRefs: migrateOdnToSubRefs
     };
 })();
