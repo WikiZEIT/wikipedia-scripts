@@ -16,6 +16,7 @@
  * @author [[w:pl:User:Jcubic]]
  */
 (() => {
+    /* v8 ignore start -- GUI initialization and editor integration */
     let api;
     let sourceBooks = [];
     let windowManager;
@@ -26,10 +27,22 @@
 
     const citationHelper = window.citationHelper || {};
 
+    function log() {
+        if (citationHelper.debug) {
+            console.log.apply(console, arguments);
+        }
+    }
+
+    log('[citation] script loaded');
+
     const page = citationHelper.page || 'Wikipedysta:Kerim44/brudnopis';
 
+    log('[citation] fetching bibliography from:', page);
     getBibliography(page).then(books => {
         sourceBooks = books || [];
+        log('[citation] sourceBooks loaded:', sourceBooks.length);
+    }).catch(function (err) {
+        console.error('[citation] getBibliography failed:', err);
     });
 
     mw.hook('ext.CodeMirror.ready').add(function (cm) {
@@ -37,12 +50,18 @@
     });
 
     mw.hook('ve.activationComplete').add(() => {
+        log('[citation] VE activation complete');
         initVE();
     });
 
     if (mw.config.get('wgAction') === 'edit' || mw.config.get('wgAction') === 'submit') {
-        mw.loader.using(['jquery.textSelection', 'ext.gadget.lib-toolbar']).then(() => {
+        log('[citation] loading WikiEditor modules...');
+        mw.loader.using(['jquery.textSelection', 'ext.gadget.lib-toolbar', 'oojs-ui-windows']).then(() => {
+            log('[citation] WikiEditor modules loaded, initializing...');
             initWikiEditor();
+            log('[citation] WikiEditor initialized');
+        }).catch(function (err) {
+            console.error('[citation] mw.loader.using failed:', err);
         });
     }
 
@@ -256,9 +275,11 @@
                 'max-height': '300px',
                 'margin-top': '0.75em'
             });
+            this.$messages = $('<div>').css({ 'margin-top': '0.75em' });
             this.panel.$element.append(
                 this.filterInput.$element,
-                this.$list
+                this.$list,
+                this.$messages
             );
             this.$body.append(this.panel.$element);
         };
@@ -272,11 +293,22 @@
                 .next(function () {
                     this._surface = data.surface;
                     this.$list.empty();
+                    this.$messages.empty();
                     this._checkboxes = [];
                     this.filterInput.setValue('');
 
                     var existingMain = data.existingMain || [];
                     var existingNested = data.existingNested || [];
+
+                    var articleFix = fixMissingOdn(existingMain);
+                    this._odnArticleCount = articleFix.count;
+                    sourceBooks.forEach(function (book) {
+                        if (!book.odn) {
+                            log('[citation] brak odn: ' + stringifyTemplate(book._templateName || 'Cytuj książkę', book));
+                            book._odnMissing = true;
+                            ensureOdn(book);
+                        }
+                    });
 
                     var mainKeys = {};
                     existingMain.forEach(function (eb) {
@@ -287,67 +319,172 @@
                         nestedKeys[bookKey(eb)] = true;
                     });
 
-                    var allBooks = [];
-                    var seenKeys = {};
+                    var sourceGroups = {};
+                    var sourceGroupOrder = [];
                     sourceBooks.forEach(function (sb) {
                         var key = bookKey(sb);
+                        if (!sourceGroups[key]) {
+                            sourceGroups[key] = [];
+                            sourceGroupOrder.push(key);
+                        }
+                        sourceGroups[key].push(sb);
+                    });
+
+                    var allEntries = [];
+                    var seenKeys = {};
+                    sourceGroupOrder.forEach(function (key) {
                         if (!seenKeys[key]) {
                             seenKeys[key] = true;
-                            allBooks.push(sb);
+                            var group = sourceGroups[key];
+                            if (group.length > 1) {
+                                allEntries.push({ type: 'variant', key: key, variants: group });
+                            } else {
+                                allEntries.push({ type: 'single', key: key, book: group[0] });
+                            }
                         }
                     });
                     existingMain.forEach(function (eb) {
                         var key = bookKey(eb);
                         if (!seenKeys[key]) {
                             seenKeys[key] = true;
-                            allBooks.push(eb);
+                            allEntries.push({ type: 'single', key: key, book: eb });
                         }
                     });
                     existingNested.forEach(function (eb) {
                         var key = bookKey(eb);
                         if (!seenKeys[key]) {
                             seenKeys[key] = true;
-                            allBooks.push(eb);
+                            allEntries.push({ type: 'single', key: key, book: eb });
                         }
                     });
 
-                    if (!allBooks.length) {
-                        this.$list.append(
-                            $('<p>').text('Brak książek.')
-                        );
+                    if (!allEntries.length) {
+                        this.$list.append($('<p>').text('Brak książek.'));
                         return;
                     }
 
-                    allBooks.sort(function (a, b) {
-                        var aEx = (mainKeys[bookKey(a)] || nestedKeys[bookKey(a)]) ? 0 : 1;
-                        var bEx = (mainKeys[bookKey(b)] || nestedKeys[bookKey(b)]) ? 0 : 1;
+                    allEntries.sort(function (a, b) {
+                        var aEx = (mainKeys[a.key] || nestedKeys[a.key]) ? 0 : 1;
+                        var bEx = (mainKeys[b.key] || nestedKeys[b.key]) ? 0 : 1;
                         return aEx - bEx;
                     });
 
-                    allBooks.forEach(function (book) {
-                        var key = bookKey(book);
+                    var self = this;
+                    allEntries.forEach(function (entry) {
+                        var key = entry.key;
                         var isNested = nestedKeys[key] || false;
                         var isMain = mainKeys[key] || false;
                         var isExisting = isMain || isNested;
-                        var label = bookLabel(book);
-                        var checkbox = new OO.ui.CheckboxInputWidget({
-                            selected: isExisting,
-                            disabled: isNested
+
+                        if (entry.type === 'variant') {
+                            var variants = entry.variants;
+                            var diffFields = findDifferingFields(variants);
+                            var label = bookLabel(variants[0]);
+                            var checkbox = new OO.ui.CheckboxInputWidget({
+                                selected: isExisting,
+                                disabled: isNested
+                            });
+
+                            var options = variants.map(function (v, i) {
+                                return { data: String(i), label: variantLabel(v, diffFields) };
+                            });
+                            var variantSelect = new OO.ui.DropdownInputWidget({
+                                options: options,
+                                value: '0',
+                                $overlay: self.$overlay
+                            });
+
+                            if (isMain) {
+                                var matchingExisting = existingMain.filter(function (eb) {
+                                    return bookKey(eb) === key;
+                                });
+                                if (matchingExisting.length) {
+                                    var matchIdx = findMatchingVariant(matchingExisting[0], variants, diffFields);
+                                    if (matchIdx !== -1) {
+                                        variantSelect.setValue(String(matchIdx));
+                                    }
+                                }
+                            }
+
+                            variantSelect.$element.css({ margin: '0.5em 0 0.5em 1.5em', 'max-width': 'calc(100% - 1.5em)' });
+                            variantSelect.$element.toggle(checkbox.isSelected());
+                            checkbox.on('change', function (selected) {
+                                variantSelect.$element.toggle(selected);
+                            });
+
+                            var field = new OO.ui.FieldLayout(checkbox, {
+                                label: label,
+                                align: 'inline'
+                            });
+
+                            var $container = $('<div>').addClass('oo-ui-layout oo-ui-fieldLayout');
+                            $container.append(field.$element, variantSelect.$element);
+
+                            var variantLabels = variants.map(function (v) {
+                                return variantLabel(v, diffFields);
+                            }).join(' ').toLowerCase();
+
+                            self._checkboxes.push({
+                                checkbox: checkbox,
+                                book: variants[0],
+                                variants: variants,
+                                variantSelect: variantSelect,
+                                isNested: isNested,
+                                label: label.toLowerCase() + ' ' + variantLabels,
+                                $field: $container
+                            });
+
+                            self.$list.append($container);
+                        } else {
+                            var book = entry.book;
+                            var label = bookLabel(book);
+                            var checkbox = new OO.ui.CheckboxInputWidget({
+                                selected: isExisting,
+                                disabled: isNested
+                            });
+                            var field = new OO.ui.FieldLayout(checkbox, {
+                                label: label,
+                                align: 'inline'
+                            });
+                            self._checkboxes.push({
+                                checkbox: checkbox,
+                                book: book,
+                                isNested: isNested,
+                                label: label.toLowerCase(),
+                                $field: field.$element
+                            });
+                            self.$list.append(field.$element);
+                        }
+                    });
+
+                    var duplicates = findDuplicateBooks(sourceBooks);
+                    var messages = [];
+                    duplicates.forEach(function (dup) {
+                        messages.push({
+                            type: 'warning',
+                            text: 'Duplikat: ' + dup.label + ' (' + dup.count + ' kopie bez rozróżnienia)'
                         });
-                        var field = new OO.ui.FieldLayout(checkbox, {
-                            label: label,
-                            align: 'inline'
-                        });
-                        this._checkboxes.push({
-                            checkbox: checkbox,
-                            book: book,
-                            isNested: isNested,
-                            label: label.toLowerCase(),
-                            $field: field.$element
-                        });
-                        this.$list.append(field.$element);
-                    }.bind(this));
+                    });
+                    messages.forEach(function (msg) {
+                        var $msg = $('<div>').css({
+                            'padding': '0.5em',
+                            'margin-top': '0.5em',
+                            'background-color': msg.type === 'warning' ? '#fef6e7' : '#f8f9fa',
+                            'border': '1px solid ' + (msg.type === 'warning' ? '#fc3' : '#a2a9b1'),
+                            'border-radius': '2px',
+                            'font-size': '0.9em'
+                        }).text(msg.text);
+                        self.$messages.append($msg);
+                    });
                 }, this);
+        };
+
+        BibliographyDialog.prototype.getReadyProcess = function (data) {
+            var dialog = this;
+            return BibliographyDialog.super.prototype.getReadyProcess.call(this, data)
+                .next(function () {
+                    setTimeout(function () { dialog.filterInput.focus(); }, 200);
+                });
         };
 
         BibliographyDialog.prototype._onFilterChange = function (value) {
@@ -361,13 +498,26 @@
             if (action === 'save') {
                 var mainBooks = this._checkboxes
                     .filter(function (item) { return item.checkbox.isSelected() && !item.isNested; })
-                    .map(function (item) { return item.book; });
+                    .map(function (item) {
+                        if (item.variants && item.variantSelect) {
+                            var idx = parseInt(item.variantSelect.getValue(), 10);
+                            return item.variants[idx];
+                        }
+                        return item.book;
+                    });
                 var surface = this._surface;
+                var odnArticleCount = this._odnArticleCount;
+                var odnSourceCount = mainBooks.filter(function (book) { return book._odnMissing; }).length;
+                mainBooks.forEach(function (book) { ensureOdn(book); });
                 return new OO.ui.Process(function () {
                     if (surface) {
                         updateBibliography(surface, mainBooks);
                     } else {
                         updateBibliographyWikiEditor(mainBooks);
+                    }
+                    var notification = buildOdnNotification(odnArticleCount, odnSourceCount);
+                    if (notification) {
+                        mw.notify($('<span>').html(notification.replace(/odn = tak/g, '<code><small>odn = tak</small></code>')));
                     }
                     this.close({ action: 'save' });
                 }, this);
@@ -425,9 +575,16 @@
 
                     this._allOptions = this._books.map(function (book, i) {
                         var label = bookLabel(book);
+                        var searchText = label.toLowerCase();
+                        var chapterAuthors = Object.keys(book).filter(function (key) {
+                            return /^nazwisko r/.test(key);
+                        }).map(function (key) { return book[key].toLowerCase(); });
+                        if (chapterAuthors.length) {
+                            searchText += ' ' + chapterAuthors.join(' ');
+                        }
                         return {
                             widget: new OO.ui.RadioOptionWidget({ data: i, label: label }),
-                            label: label.toLowerCase()
+                            label: searchText
                         };
                     });
 
@@ -458,6 +615,14 @@
             if (firstVisible && (!selectedItem || selectedHidden)) {
                 this.bookSelect.selectItem(firstVisible);
             }
+        };
+
+        OdnDialog.prototype.getReadyProcess = function (data) {
+            var dialog = this;
+            return OdnDialog.super.prototype.getReadyProcess.call(this, data)
+                .next(function () {
+                    setTimeout(function () { dialog.filterInput.focus(); }, 200);
+                });
         };
 
         OdnDialog.prototype.getActionProcess = function (action) {
@@ -491,6 +656,8 @@
                 }, this);
         };
     }
+
+    /* v8 ignore stop */
 
     // =========================================================================
     //  Content manipulation
@@ -633,6 +800,7 @@
         return { main: mainEntries, nested: nestedEntries };
     }
 
+    /* v8 ignore start -- GUI content manipulation */
     function updateBibliography(surface, mainBooks) {
         if (surface.getMode() !== 'source') {
             mw.notify('Edycja bibliografii dostępna tylko w edytorze źródłowym.');
@@ -679,6 +847,8 @@
         return endPos;
     }
 
+    /* v8 ignore stop */
+
     // =========================================================================
     //  String builders
     // =========================================================================
@@ -696,14 +866,21 @@
                 parts.push(p);
             });
         } else {
-            var names = Object.keys(book).filter(function (key) {
-                return key.startsWith('nazwisko');
+            var rNames = Object.keys(book).filter(function (key) {
+                return /^nazwisko r/.test(key);
+            }).sort();
+            var names = rNames.length ? rNames : Object.keys(book).filter(function (key) {
+                return key.startsWith('nazwisko') && !/^nazwisko r/.test(key);
             }).sort();
             names.forEach(function (key) {
                 parts.push(book[key]);
             });
             var year = book.rok || book.data || '';
             if (year) {
+                var odnVal = book.odn || '';
+                if (odnVal && odnVal !== 'tak' && /^[a-z]$/i.test(odnVal)) {
+                    year += odnVal;
+                }
                 parts.push(year);
             }
         }
@@ -722,6 +899,7 @@
     // =========================================================================
     //  Helpers
     // =========================================================================
+    /* v8 ignore start -- GUI/API helpers */
     function getPageWikitext(surface) {
         if (surface.getMode() === 'source') {
             var raw = surface.getModel().getDom();
@@ -738,6 +916,8 @@
             return data.query.pages[0].revisions[0].content;
         });
     }
+
+    /* v8 ignore stop */
 
     function bookKey(book) {
         if (book._positional) {
@@ -769,6 +949,62 @@
         if (year) parts.push('(' + year + ')');
         if (title) parts.push('— ' + title);
         return parts.join(' ') || 'Książka bez tytułu';
+    }
+
+    function findDifferingFields(books) {
+        var allKeys = {};
+        books.forEach(function (book) {
+            Object.keys(book).forEach(function (key) {
+                if (key !== '_templateName' && key !== '_positional') {
+                    allKeys[key] = true;
+                }
+            });
+        });
+        var differing = [];
+        Object.keys(allKeys).forEach(function (key) {
+            var first = books[0][key] || '';
+            for (var i = 1; i < books.length; i++) {
+                if ((books[i][key] || '') !== first) {
+                    differing.push(key);
+                    break;
+                }
+            }
+        });
+        return differing;
+    }
+
+    function variantLabel(book, differingFields) {
+        if (book['rozdział']) {
+            var label = stripLinks(book['rozdział']);
+            if (label.length > 60) label = label.slice(0, 57) + '...';
+            var chapterAuthor = book['nazwisko r'];
+            if (chapterAuthor) {
+                label += ' (' + chapterAuthor + ')';
+            }
+            return label;
+        }
+        var parts = [];
+        differingFields.forEach(function (field) {
+            if (book[field] && !field.startsWith('_')) {
+                parts.push(stripLinks(String(book[field])));
+            }
+        });
+        return parts.join(', ') || 'Wariant';
+    }
+
+    function findMatchingVariant(existing, variants, differingFields) {
+        for (var i = 0; i < variants.length; i++) {
+            var match = true;
+            for (var j = 0; j < differingFields.length; j++) {
+                var field = differingFields[j];
+                if ((existing[field] || '').trim().toLowerCase() !== (variants[i][field] || '').trim().toLowerCase()) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) return i;
+        }
+        return -1;
     }
 
     function parseTemplate(code) {
@@ -825,6 +1061,7 @@
         return '{{' + name + '|' + allParams.join('|') + '}}';
     }
 
+    /* v8 ignore start -- API/network */
     function getBibliography(page) {
         return api.get({
             action: 'query',
@@ -835,7 +1072,7 @@
             try {
                 var code = data.query.pages[0].revisions[0].content;
                 var books = matchCytujTemplates(code);
-                console.log('[citation] Cytuj w brudnopisie (' + page + '): ' + books.length);
+                log('[citation] Cytuj w brudnopisie (' + page + '): ' + books.length);
                 if (!books.length) return [];
                 return books.map(parseTemplate);
             } catch (e) {
@@ -855,4 +1092,109 @@
             }
         });
     }
+    /* v8 ignore stop */
+
+    // =========================================================================
+    //  Odn validation & duplicate detection
+    // =========================================================================
+    function ensureOdn(book) {
+        var odn = book.odn || '';
+        if (!odn) {
+            book.odn = 'tak';
+        }
+        return book;
+    }
+
+    function fixMissingOdn(books) {
+        var count = 0;
+        var result = books.map(function (book) {
+            var odn = book.odn || '';
+            if (!odn) {
+                ensureOdn(book);
+                count++;
+            }
+            return book;
+        });
+        return { books: result, count: count };
+    }
+
+    function findDuplicateBooks(books) {
+        var groups = {};
+        books.forEach(function (book) {
+            var key = bookKey(book);
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(book);
+        });
+
+        var duplicates = [];
+        Object.keys(groups).forEach(function (key) {
+            var group = groups[key];
+            if (group.length < 2) return;
+
+            var undistinguished = group.filter(function (book) {
+                if (book.rozdział) return false;
+                var odn = book.odn || '';
+                if (/^[a-z]$/i.test(odn)) return false;
+                if (/\{\{odn\/id\|/.test(odn)) return false;
+                return true;
+            });
+
+            if (undistinguished.length >= 2) {
+                duplicates.push({
+                    key: key,
+                    label: bookLabel(undistinguished[0]),
+                    count: undistinguished.length
+                });
+            }
+        });
+
+        return duplicates;
+    }
+
+    function buildOdnNotification(articleCount, sourceCount) {
+        if (!articleCount && !sourceCount) return null;
+
+        var rules = new Intl.PluralRules('pl-PL');
+        function pluralBrakujace(n) {
+            var cat = rules.select(n);
+            return cat === 'many' ? 'brakujących' : 'brakujące';
+        }
+
+        var parts = [];
+        if (articleCount) {
+            parts.push('(' + articleCount + ') ' + pluralBrakujace(articleCount) + ' odn = tak w artykule');
+        }
+        if (sourceCount) {
+            parts.push('(' + sourceCount + ') ' + pluralBrakujace(sourceCount) + ' odn = tak ze strony źródłowej');
+        }
+
+        return 'Dodano ' + parts.join(' oraz ') + '.';
+    }
+
+    // =========================================================================
+    //  Public API (revealing module pattern)
+    // =========================================================================
+    window.citationHelper = citationHelper;
+    citationHelper.api = {
+        matchCytujTemplates: matchCytujTemplates,
+        parseTemplate: parseTemplate,
+        splitTemplateParams: splitTemplateParams,
+        parseExistingBibliography: parseExistingBibliography,
+        buildOdnString: buildOdnString,
+        buildBibEntries: buildBibEntries,
+        stringifyTemplate: stringifyTemplate,
+        insertBibliographySection: insertBibliographySection,
+        ensurePrzypisy: ensurePrzypisy,
+        findEndOfArticlePos: findEndOfArticlePos,
+        bookKey: bookKey,
+        bookLabel: bookLabel,
+        stripLinks: stripLinks,
+        findDifferingFields: findDifferingFields,
+        variantLabel: variantLabel,
+        findMatchingVariant: findMatchingVariant,
+        ensureOdn: ensureOdn,
+        fixMissingOdn: fixMissingOdn,
+        findDuplicateBooks: findDuplicateBooks,
+        buildOdnNotification: buildOdnNotification
+    };
 })();
