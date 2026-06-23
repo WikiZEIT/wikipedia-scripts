@@ -276,15 +276,38 @@
                 'margin-top': '0.75em'
             });
             this.$messages = $('<div>').css({ 'margin-top': '0.75em' });
+
+            this.sortCheckbox = new OO.ui.CheckboxInputWidget({
+                selected: loadSetting('sort', false)
+            });
+            this.sortCheckbox.on('change', function (selected) {
+                saveSetting('sort', selected);
+            });
+            var sortField = new OO.ui.FieldLayout(this.sortCheckbox, {
+                label: 'Sortuj bibliografię (nazwisko, rok)',
+                align: 'inline'
+            });
+            sortField.$element.css({ padding: 0, margin: 0 });
+            this.$options = $('<div>').css({
+                'margin-top': '0.5em',
+                'padding-top': '0.5em',
+                'border-top': '1px solid #c8ccd1'
+            });
+            this.$options.append(sortField.$element);
+
             this.panel.$element.append(
                 this.filterInput.$element,
                 this.$list,
-                this.$messages
+                this.$messages,
+                this.$options
             );
             this.$body.append(this.panel.$element);
         };
 
         BibliographyDialog.prototype.getBodyHeight = function () {
+            if (this.$body && this.$body[0] && this.$body[0].scrollHeight) {
+                return this.$body[0].scrollHeight;
+            }
             return 400;
         };
 
@@ -483,6 +506,7 @@
             var dialog = this;
             return BibliographyDialog.super.prototype.getReadyProcess.call(this, data)
                 .next(function () {
+                    dialog.updateSize();
                     setTimeout(function () { dialog.filterInput.focus(); }, 200);
                 });
         };
@@ -509,6 +533,9 @@
                 var odnArticleCount = this._odnArticleCount;
                 var odnSourceCount = mainBooks.filter(function (book) { return book._odnMissing; }).length;
                 mainBooks.forEach(function (book) { ensureOdn(book); });
+                if (this.sortCheckbox.isSelected()) {
+                    mainBooks = sortBooks(mainBooks);
+                }
                 return new OO.ui.Process(function () {
                     if (surface) {
                         updateBibliography(surface, mainBooks);
@@ -951,6 +978,59 @@
         return parts.join(' ') || 'Książka bez tytułu';
     }
 
+    function sortKey(book) {
+        if (book._positional) {
+            return book._positional.join('|').toLowerCase();
+        }
+        // W bibliografii sortujemy po nazwisku redaktora/autora tomu (`nazwisko`),
+        // a nie autora rozdziału (`nazwisko r`), żeby pozycja "Wimmer (red.)"
+        // znalazła się przy literze W, nie przy autorze rozdziału.
+        var nKeys = Object.keys(book).filter(function (k) {
+            return k.indexOf('nazwisko') === 0 && !/^nazwisko r/.test(k);
+        }).sort();
+        if (!nKeys.length) {
+            nKeys = Object.keys(book).filter(function (k) {
+                return /^nazwisko r/.test(k);
+            }).sort();
+        }
+        var parts = nKeys.map(function (k) { return book[k]; });
+        var year = book.rok || book.data || '';
+        if (year) {
+            var odn = book.odn || '';
+            if (odn && odn !== 'tak' && /^[a-z]$/i.test(odn)) {
+                year += odn;
+            }
+            parts.push(year);
+        }
+        return parts.join('|').toLowerCase();
+    }
+
+    function sortBooks(books) {
+        return books.slice().sort(function (a, b) {
+            return sortKey(a).localeCompare(sortKey(b), 'pl');
+        });
+    }
+
+    var STORAGE_PREFIX = 'CitationHelper_';
+
+    function loadSetting(key, defaultValue) {
+        try {
+            var raw = localStorage.getItem(STORAGE_PREFIX + key);
+            if (raw === null) return defaultValue;
+            return JSON.parse(raw);
+        } catch (e) {
+            return defaultValue;
+        }
+    }
+
+    function saveSetting(key, value) {
+        try {
+            localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value));
+        } catch (e) {
+            // localStorage może być niedostępny (tryb prywatny, brak miejsca)
+        }
+    }
+
     function findDifferingFields(books) {
         var allKeys = {};
         books.forEach(function (book) {
@@ -1052,7 +1132,7 @@
         var positional = data._positional || [];
         var named = Object.entries(data)
             .filter(function (entry) {
-                return entry[0] !== '_templateName' && entry[0] !== '_positional';
+                return entry[0].charAt(0) !== '_';
             })
             .map(function (entry) {
                 return ' ' + entry[0] + ' = ' + entry[1];
@@ -1195,6 +1275,10 @@
         ensureOdn: ensureOdn,
         fixMissingOdn: fixMissingOdn,
         findDuplicateBooks: findDuplicateBooks,
-        buildOdnNotification: buildOdnNotification
+        buildOdnNotification: buildOdnNotification,
+        sortKey: sortKey,
+        sortBooks: sortBooks,
+        loadSetting: loadSetting,
+        saveSetting: saveSetting
     };
 })();
