@@ -1506,3 +1506,54 @@ describe('migrateOdnToSubRefs', () => {
             .toBe('Y<ref name="Wimmer_red_1973" details="s. 5" />.');
     });
 });
+
+// =========================================================================
+//  removeUnusedReferences
+// =========================================================================
+describe('removeUnusedReferences', () => {
+    it('removes a <ref> from <references> when its name is not used in the body', () => {
+        const source = 'Tekst.\n<references>\n<ref name="A">A def</ref>\n<ref name="B">B def</ref>\n</references>';
+        const result = api.removeUnusedReferences(source);
+        expect(result).not.toContain('A def');
+        expect(result).not.toContain('B def');
+        expect(result).toContain('<references>');
+        expect(result).toContain('</references>');
+    });
+
+    it('keeps refs that are used as self-closing <ref name="X" /> in the body', () => {
+        const source = 'Tekst<ref name="A" details="s. 5" />.\n<references>\n<ref name="A">A def</ref>\n<ref name="B">B def</ref>\n</references>';
+        const result = api.removeUnusedReferences(source);
+        expect(result).toContain('A def');
+        expect(result).not.toContain('B def');
+    });
+
+    it('keeps refs that are used as <ref name="X">inline</ref> in the body', () => {
+        const source = '<ref name="X">inline</ref>.\n<references>\n<ref name="X">def X</ref>\n<ref name="Y">def Y</ref>\n</references>';
+        const result = api.removeUnusedReferences(source);
+        expect(result).toContain('def X');
+        expect(result).not.toContain('def Y');
+    });
+
+    it('returns source unchanged when there is no <references> block', () => {
+        const source = 'Just text.';
+        expect(api.removeUnusedReferences(source)).toBe(source);
+    });
+
+    it('returns source unchanged when every defined ref is used', () => {
+        const source = '<ref name="A" />.\n<references>\n<ref name="A">A def</ref>\n</references>';
+        expect(api.removeUnusedReferences(source)).toBe(source);
+    });
+
+    it('does not consider definitions inside <references> as "uses"', () => {
+        // The defining <ref name="A">...</ref> inside <references> must NOT count as a usage.
+        const source = '<references>\n<ref name="A">A def</ref>\n</references>';
+        const result = api.removeUnusedReferences(source);
+        expect(result).not.toContain('A def');
+    });
+
+    it('collapses extra blank lines after removing entries', () => {
+        const source = 'Tekst<ref name="A" />.\n<references>\n<ref name="A">A def</ref>\n<ref name="B">B def</ref>\n<ref name="C">C def</ref>\n</references>';
+        const result = api.removeUnusedReferences(source);
+        expect(result).not.toMatch(/\n{3,}/);
+    });
+});

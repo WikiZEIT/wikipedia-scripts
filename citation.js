@@ -14,7 +14,7 @@
  * strona wkazywana w page, powinna zawierać ksiązki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-06-23 23:22:04+0200
+ * @date 2026-06-23 23:42:38+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
@@ -289,6 +289,7 @@
         BibliographyDialog.static.size = 'medium';
         BibliographyDialog.static.actions = [
             { action: 'save', label: 'Zapisz', flags: ['primary', 'progressive'] },
+            { action: 'cleanup', icon: 'trash', title: 'Usuń nieużywane referencje', flags: 'destructive' },
             { label: 'Anuluj', flags: ['safe', 'close'] }
         ];
 
@@ -588,6 +589,39 @@
                         mw.notify($('<span>').html(notification.replace(/odn = tak/g, '<code><small>odn = tak</small></code>')));
                     }
                     this.close({ action: 'save' });
+                }, this);
+            }
+            if (action === 'cleanup') {
+                var surface = this._surface;
+                return new OO.ui.Process(function () {
+                    var source, applyNewSource;
+                    if (surface) {
+                        var surfaceModel = surface.getModel();
+                        source = surfaceModel.getDom();
+                        applyNewSource = function (newSrc) {
+                            var range = new ve.Range(1, surfaceModel.getDocument().data.getLength());
+                            if (codeMirror && codeMirror.isActive) {
+                                codeMirror.toggle(false);
+                                surfaceModel.getLinearFragment(range).insertContent(newSrc);
+                                codeMirror.toggle(true);
+                            } else {
+                                surfaceModel.getLinearFragment(range).insertContent(newSrc);
+                            }
+                        };
+                    } else {
+                        var $tb = $('#wpTextbox1');
+                        source = $tb.textSelection('getContents');
+                        applyNewSource = function (newSrc) { $tb.textSelection('setContents', newSrc); };
+                    }
+                    if (typeof source !== 'string') return;
+                    var newSource = removeUnusedReferences(source);
+                    if (newSource !== source) {
+                        applyNewSource(newSource);
+                        mw.notify('Usunięto nieużywane referencje.');
+                    } else {
+                        mw.notify('Brak nieużywanych referencji do usunięcia.');
+                    }
+                    this.close({ action: 'cleanup' });
                 }, this);
             }
             return BibliographyDialog.super.prototype.getActionProcess.call(this, action);
@@ -1257,6 +1291,33 @@
         return source.replace(/\s+$/, '') + '\n\n' + section;
     }
 
+    function removeUnusedReferences(source) {
+        if (typeof source !== 'string') return source;
+        var blockRe = /<references\b[^>]*>([\s\S]*?)<\/references>/i;
+        var blockMatch = source.match(blockRe);
+        if (!blockMatch) return source;
+
+        // Zbierz nazwy refów używanych POZA blokiem <references>...
+        var bodyOnly = source.slice(0, blockMatch.index) + source.slice(blockMatch.index + blockMatch[0].length);
+        var used = {};
+        var useRe = /<ref\b[^>]*\bname\s*=\s*"([^"]+)"/gi;
+        var m;
+        while ((m = useRe.exec(bodyOnly)) !== null) {
+            used[m[1]] = true;
+        }
+
+        var refRe = /<ref\b[^>]*\bname\s*=\s*"([^"]+)"[^>]*>[\s\S]*?<\/ref>\s*/gi;
+        var newContent = blockMatch[1].replace(refRe, function (full, name) {
+            return used[name] ? full : '';
+        });
+        // Zmniejsz nadmiar pustych linii pozostałych po usunięciu wpisów.
+        newContent = newContent.replace(/\n{3,}/g, '\n\n');
+
+        var fullOpen = blockMatch[0].slice(0, blockMatch[0].indexOf('>') + 1);
+        var newBlock = fullOpen + newContent + '</references>';
+        return source.slice(0, blockMatch.index) + newBlock + source.slice(blockMatch.index + blockMatch[0].length);
+    }
+
     function migrateOdnToSubRefs(source) {
         if (typeof source !== 'string') return source;
         return source.replace(/\{\{odn\b([^}]*)\}\}/g, function (full, paramsStr) {
@@ -1539,6 +1600,7 @@
         buildReferencesBlock: buildReferencesBlock,
         parseSubReferences: parseSubReferences,
         insertReferencesSection: insertReferencesSection,
-        migrateOdnToSubRefs: migrateOdnToSubRefs
+        migrateOdnToSubRefs: migrateOdnToSubRefs,
+        removeUnusedReferences: removeUnusedReferences
     };
 })();
