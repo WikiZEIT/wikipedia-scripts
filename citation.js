@@ -593,6 +593,7 @@
             }
             if (action === 'cleanup') {
                 var surface = this._surface;
+                var dialog = this;
                 return new OO.ui.Process(function () {
                     var source, applyNewSource;
                     if (surface) {
@@ -614,14 +615,28 @@
                         applyNewSource = function (newSrc) { $tb.textSelection('setContents', newSrc); };
                     }
                     if (typeof source !== 'string') return;
-                    var newSource = removeUnusedReferences(source);
-                    if (newSource !== source) {
-                        applyNewSource(newSource);
-                        mw.notify('Usunięto nieużywane referencje.');
-                    } else {
+
+                    var unused = findUnusedRefNames(source);
+                    if (!unused.length) {
                         mw.notify('Brak nieużywanych referencji do usunięcia.');
+                        return;
                     }
-                    this.close({ action: 'cleanup' });
+                    var unusedSet = {};
+                    unused.forEach(function (n) { unusedSet[n] = true; });
+
+                    // Wpisy szablonu z wieloma wariantami (rozdziały) — uznaj
+                    // checkbox za nieużywany jeśli KAŻDY wariant ma niewykorzystaną
+                    // nazwę refa, inaczej zostaw zaznaczony.
+                    dialog._checkboxes.forEach(function (item) {
+                        var books = item.variants || [item.book];
+                        var allUnused = books.every(function (b) { return unusedSet[refName(b)]; });
+                        if (allUnused && item.checkbox.isSelected()) {
+                            item.checkbox.setSelected(false);
+                        }
+                    });
+
+                    applyNewSource(removeUnusedReferences(source));
+                    mw.notify('Usunięto nieużywane referencje: ' + unused.join(', '));
                 }, this);
             }
             return BibliographyDialog.super.prototype.getActionProcess.call(this, action);
@@ -1291,13 +1306,11 @@
         return source.replace(/\s+$/, '') + '\n\n' + section;
     }
 
-    function removeUnusedReferences(source) {
-        if (typeof source !== 'string') return source;
+    function findUnusedRefNames(source) {
+        if (typeof source !== 'string') return [];
         var blockRe = /<references\b[^>]*>([\s\S]*?)<\/references>/i;
         var blockMatch = source.match(blockRe);
-        if (!blockMatch) return source;
-
-        // Zbierz nazwy refów używanych POZA blokiem <references>...
+        if (!blockMatch) return [];
         var bodyOnly = source.slice(0, blockMatch.index) + source.slice(blockMatch.index + blockMatch[0].length);
         var used = {};
         var useRe = /<ref\b[^>]*\bname\s*=\s*"([^"]+)"/gi;
@@ -1305,12 +1318,27 @@
         while ((m = useRe.exec(bodyOnly)) !== null) {
             used[m[1]] = true;
         }
+        var unused = [];
+        var defRe = /<ref\b[^>]*\bname\s*=\s*"([^"]+)"[^>]*>[\s\S]*?<\/ref>/gi;
+        while ((m = defRe.exec(blockMatch[1])) !== null) {
+            if (!used[m[1]]) unused.push(m[1]);
+        }
+        return unused;
+    }
 
+    function removeUnusedReferences(source) {
+        if (typeof source !== 'string') return source;
+        var unused = findUnusedRefNames(source);
+        if (!unused.length) return source;
+        var unusedSet = {};
+        unused.forEach(function (n) { unusedSet[n] = true; });
+
+        var blockRe = /<references\b[^>]*>([\s\S]*?)<\/references>/i;
+        var blockMatch = source.match(blockRe);
         var refRe = /<ref\b[^>]*\bname\s*=\s*"([^"]+)"[^>]*>[\s\S]*?<\/ref>\s*/gi;
         var newContent = blockMatch[1].replace(refRe, function (full, name) {
-            return used[name] ? full : '';
+            return unusedSet[name] ? '' : full;
         });
-        // Zmniejsz nadmiar pustych linii pozostałych po usunięciu wpisów.
         newContent = newContent.replace(/\n{3,}/g, '\n\n');
 
         var fullOpen = blockMatch[0].slice(0, blockMatch[0].indexOf('>') + 1);
@@ -1601,6 +1629,7 @@
         parseSubReferences: parseSubReferences,
         insertReferencesSection: insertReferencesSection,
         migrateOdnToSubRefs: migrateOdnToSubRefs,
-        removeUnusedReferences: removeUnusedReferences
+        removeUnusedReferences: removeUnusedReferences,
+        findUnusedRefNames: findUnusedRefNames
     };
 })();

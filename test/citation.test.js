@@ -1557,3 +1557,27 @@ describe('removeUnusedReferences', () => {
         expect(result).not.toMatch(/\n{3,}/);
     });
 });
+
+// =========================================================================
+//  findUnusedRefNames
+// =========================================================================
+describe('findUnusedRefNames', () => {
+    it('returns names defined in <references> but not used in the body', () => {
+        const source = 'Tekst<ref name="A" />.\n<references>\n<ref name="A">A</ref>\n<ref name="B">B</ref>\n<ref name="C">C</ref>\n</references>';
+        expect(api.findUnusedRefNames(source).sort()).toEqual(['B', 'C']);
+    });
+
+    it('returns an empty array when every ref is used', () => {
+        const source = '<ref name="A" /> and <ref name="B" />.\n<references>\n<ref name="A">A</ref>\n<ref name="B">B</ref>\n</references>';
+        expect(api.findUnusedRefNames(source)).toEqual([]);
+    });
+
+    it('returns an empty array when there is no <references> block', () => {
+        expect(api.findUnusedRefNames('plain text')).toEqual([]);
+    });
+
+    it('does not treat definitions inside <references> as usages', () => {
+        const source = '<references>\n<ref name="A">A def</ref>\n</references>';
+        expect(api.findUnusedRefNames(source)).toEqual(['A']);
+    });
+});
