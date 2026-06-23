@@ -14,6 +14,7 @@
  * strona wkazywana w page, powinna zawierać ksiązki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
+ * @date 2026-06-23 22:27:03+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
