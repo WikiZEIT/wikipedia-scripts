@@ -722,23 +722,56 @@
         return earliest;
     }
 
+    function findBibliography(source) {
+        if (typeof source !== 'string') return null;
+        var openRe = /(={2,3})\s*Bibliografia\s*\1\n/;
+        var openMatch = openRe.exec(source);
+        if (!openMatch) return null;
+        var level = openMatch[1].length;
+        var contentStart = openMatch.index + openMatch[0].length;
+        // Sekcja kończy się przy nagłówku o takiej samej lub mniejszej głębokości
+        // (mniej-lub-tyle samo `=`), albo na końcu źródła.
+        var endRe = new RegExp('\\n={2,' + level + '}[^=]');
+        var rest = source.slice(contentStart);
+        var endMatch = endRe.exec(rest);
+        var contentEnd = endMatch ? contentStart + endMatch.index : source.length;
+        return {
+            level: level,
+            headerLine: openMatch[0],
+            headerStart: openMatch.index,
+            contentStart: contentStart,
+            contentEnd: contentEnd,
+            content: source.slice(contentStart, contentEnd)
+        };
+    }
+
+    function detectInsertLevel(source) {
+        // Tryb edycji sekcji: tekst zaczyna się od pojedynczego nagłówka
+        // poziomu 2 (== Foo ==) i nie zawiera dalej innych nagłówków poziomu 2.
+        // Wtedy nowe sekcje wstawiamy zagnieżdżone (===) wewnątrz tej sekcji.
+        if (typeof source !== 'string') return 2;
+        var leading = source.match(/^==\s*[^=\n][^\n]*?==\s*\n/);
+        if (!leading) return 2;
+        var afterLeading = source.slice(leading[0].length);
+        if (/\n==\s*[^=]/.test(afterLeading)) return 2;
+        return 3;
+    }
+
     function ensurePrzypisy(source) {
-        if (/==\s*Przypisy\s*==/m.test(source)) return source;
-        var przypisySection = '== Przypisy ==\n{{Przypisy}}\n';
-        var bibMatch = source.search(/^==\s*Bibliografia\s*==/m);
-        if (bibMatch !== -1) {
-            var before = source.slice(0, bibMatch).replace(/\s+$/, '');
-            return before + '\n\n' + przypisySection + '\n' + source.slice(bibMatch);
-        }
-        return source;
+        if (/^={2,3}\s*Przypisy\s*={2,3}\s*$/m.test(source)) return source;
+        var bib = findBibliography(source);
+        if (!bib) return source;
+        var marker = bib.level === 3 ? '===' : '==';
+        var przypisySection = marker + ' Przypisy ' + marker + '\n{{Przypisy}}\n';
+        var before = source.slice(0, bib.headerStart).replace(/\s+$/, '');
+        return before + '\n\n' + przypisySection + '\n' + source.slice(bib.headerStart);
     }
 
     function insertBibliographySection(source, bibEntries) {
-        var bibRe = /==\s*Bibliografia\s*==\n([\s\S]*?)(?=\n==[^=]|$)/;
-        var match = source.match(bibRe);
+        var bib = findBibliography(source);
 
-        if (match) {
-            var content = match[1];
+        if (bib) {
+            var content = bib.content;
             var subIdx = content.search(/^===/m);
             var mainContent = subIdx !== -1 ? content.slice(0, subIdx) : content;
             var subPart = subIdx !== -1 ? content.slice(subIdx) : '';
@@ -759,19 +792,17 @@
             }
 
             var newMain = bibEntries ? bibEntries + '\n' : '';
-            var headerStart = match.index;
-            var headerLine = source.slice(headerStart).match(/^==\s*Bibliografia\s*==\n/)[0];
-            var contentStart = headerStart + headerLine.length;
-            var contentEnd = contentStart + content.length;
 
             return ensurePrzypisy(
-                source.slice(0, contentStart) + newMain + trailing + subPart + source.slice(contentEnd)
+                source.slice(0, bib.contentStart) + newMain + trailing + subPart + source.slice(bib.contentEnd)
             );
         }
 
         if (!bibEntries) return source;
 
-        var section = '== Przypisy ==\n{{Przypisy}}\n\n== Bibliografia ==\n' + bibEntries + '\n';
+        var insertLevel = detectInsertLevel(source);
+        var marker = insertLevel === 3 ? '===' : '==';
+        var section = marker + ' Przypisy ' + marker + '\n{{Przypisy}}\n\n' + marker + ' Bibliografia ' + marker + '\n' + bibEntries + '\n';
         var pos = findEndOfArticlePos(source);
 
         if (pos !== -1) {
@@ -812,15 +843,22 @@
 
     function parseExistingBibliography(source) {
         var empty = { main: [], nested: [] };
-        if (typeof source !== 'string') return empty;
-        var re = /==\s*Bibliografia\s*==\n([\s\S]*?)(?=\n==[^=]|$)/;
-        var match = source.match(re);
-        if (!match) return empty;
+        var bib = findBibliography(source);
+        if (!bib) return empty;
 
-        var content = match[1];
-        var subIdx = content.search(/^===/m);
-        var mainContent = subIdx !== -1 ? content.slice(0, subIdx) : content;
-        var subContent = subIdx !== -1 ? content.slice(subIdx) : '';
+        var content = bib.content;
+        // Pod-sekcje (===) wewnątrz biblografii poziomu 2 traktujemy jako
+        // zagnieżdżone źródła; przy poziomie 3 nie ma sensownego "zagnieżdżenia"
+        // (sąsiednie === to już inna sekcja), więc całość trafia do main.
+        var subContent = '';
+        var mainContent = content;
+        if (bib.level === 2) {
+            var subIdx = content.search(/^===/m);
+            if (subIdx !== -1) {
+                mainContent = content.slice(0, subIdx);
+                subContent = content.slice(subIdx);
+            }
+        }
 
         var mainEntries = matchCytujTemplates(mainContent).map(parseTemplate);
         var nestedEntries = matchCytujTemplates(subContent).map(parseTemplate);
@@ -1269,6 +1307,8 @@
         stringifyTemplate: stringifyTemplate,
         insertBibliographySection: insertBibliographySection,
         ensurePrzypisy: ensurePrzypisy,
+        findBibliography: findBibliography,
+        detectInsertLevel: detectInsertLevel,
         findEndOfArticlePos: findEndOfArticlePos,
         bookKey: bookKey,
         bookLabel: bookLabel,

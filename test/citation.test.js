@@ -157,6 +157,28 @@ describe('parseExistingBibliography', () => {
         expect(result.nested).toEqual([]);
     });
 
+    it('parses === Bibliografia === (level 3) inside a discussion thread', () => {
+        const source = '== Thread ==\nDiscussion.\n\n=== Bibliografia ===\n* {{Cytuj książkę |nazwisko=Kowalski |rok=2020}}\n* {{Cytuj książkę |nazwisko=Nowak |rok=2019}}\n';
+        const result = api.parseExistingBibliography(source);
+        expect(result.main).toHaveLength(2);
+        expect(result.main[0].nazwisko).toBe('Kowalski');
+        expect(result.main[1].nazwisko).toBe('Nowak');
+    });
+
+    it('stops level-3 Bibliografia at sibling === Przypisy === (does not include it)', () => {
+        const source = '== Thread ==\n=== Bibliografia ===\n* {{Cytuj książkę |nazwisko=K |rok=2020}}\n\n=== Przypisy ===\n{{Przypisy}}\n';
+        const result = api.parseExistingBibliography(source);
+        expect(result.main).toHaveLength(1);
+        expect(result.main[0].nazwisko).toBe('K');
+    });
+
+    it('stops level-3 Bibliografia at parent-sibling == Other Thread ==', () => {
+        const source = '== Thread A ==\n=== Bibliografia ===\n* {{Cytuj książkę |nazwisko=A |rok=2020}}\n\n== Thread B ==\n=== Bibliografia ===\n* {{Cytuj książkę |nazwisko=B |rok=2021}}\n';
+        const result = api.parseExistingBibliography(source);
+        expect(result.main).toHaveLength(1);
+        expect(result.main[0].nazwisko).toBe('A');
+    });
+
     it('returns empty for non-string input', () => {
         expect(api.parseExistingBibliography(null)).toEqual({ main: [], nested: [] });
         expect(api.parseExistingBibliography(undefined)).toEqual({ main: [], nested: [] });
@@ -583,6 +605,18 @@ describe('ensurePrzypisy', () => {
         const source = 'Just plain text.';
         expect(api.ensurePrzypisy(source)).toBe(source);
     });
+
+    it('inserts === Przypisy === when Bibliografia is at level 3', () => {
+        const source = '== Thread ==\nText.\n\n=== Bibliografia ===\n* {{Cytuj książkę |nazwisko=K |rok=2020}}\n';
+        const result = api.ensurePrzypisy(source);
+        expect(result).toContain('=== Przypisy ===');
+        expect(result.indexOf('=== Przypisy ===')).toBeLessThan(result.indexOf('=== Bibliografia ==='));
+    });
+
+    it('preserves existing === Przypisy === at level 3', () => {
+        const source = '== Thread ==\n=== Przypisy ===\n{{Przypisy}}\n\n=== Bibliografia ===\n* x\n';
+        expect(api.ensurePrzypisy(source)).toBe(source);
+    });
 });
 
 // =========================================================================
@@ -687,6 +721,35 @@ describe('insertBibliographySection', () => {
         const result = api.insertBibliographySection(source, kowalskiEntry);
         expect(result).toContain('== Przypisy ==');
         expect(result).toContain('{{Przypisy}}');
+    });
+
+    it('updates content inside an existing === Bibliografia === (level 3)', () => {
+        const source = '== Thread ==\nText.\n\n=== Bibliografia ===\n* {{Cytuj książkę |nazwisko=Old |rok=2000}}\n';
+        const newEntry = '* {{Cytuj książkę |nazwisko=Nowy |rok=2024}}';
+        const result = api.insertBibliographySection(source, newEntry);
+        expect(result).toContain('=== Bibliografia ===');
+        expect(result).toContain('nazwisko=Nowy');
+        expect(result).not.toContain('nazwisko=Old');
+    });
+
+    it('creates === Bibliografia === / === Przypisy === when source is a level-2 section (section-edit mode)', () => {
+        const source = '== Thread ==\nDiscussion only.\n';
+        const newEntry = '* {{Cytuj książkę |nazwisko=X |rok=2020}}';
+        const result = api.insertBibliographySection(source, newEntry);
+        const bibHeaders = result.match(/={2,3} Bibliografia ={2,3}/g) || [];
+        const przypHeaders = result.match(/={2,3} Przypisy ={2,3}/g) || [];
+        expect(bibHeaders).toEqual(['=== Bibliografia ===']);
+        expect(przypHeaders).toEqual(['=== Przypisy ===']);
+    });
+
+    it('creates level-2 sections in normal whole-page context (no enclosing section)', () => {
+        const source = 'Article intro paragraph.\n';
+        const newEntry = '* {{Cytuj książkę |nazwisko=X |rok=2020}}';
+        const result = api.insertBibliographySection(source, newEntry);
+        const bibHeaders = result.match(/={2,3} Bibliografia ={2,3}/g) || [];
+        const przypHeaders = result.match(/={2,3} Przypisy ={2,3}/g) || [];
+        expect(bibHeaders).toEqual(['== Bibliografia ==']);
+        expect(przypHeaders).toEqual(['== Przypisy ==']);
     });
 
     it('does not duplicate Przypisy if already present', () => {
