@@ -14,7 +14,7 @@
  * strona wkazywana w page, powinna zawierać ksiązki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-06-23 23:10:57+0200
+ * @date 2026-06-23 23:22:04+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
@@ -317,7 +317,6 @@
                 label: 'Sortuj bibliografię (nazwisko, rok)',
                 align: 'inline'
             });
-            sortField.$element.css({ padding: 0, margin: 0 });
 
             this.podprzypisyCheckbox = new OO.ui.CheckboxInputWidget({
                 selected: loadSetting('podprzypisy', false)
@@ -329,14 +328,13 @@
                 label: 'Podprzypisy (sub-references, zamiast {{odn}})',
                 align: 'inline'
             });
-            podField.$element.css({ padding: 0, margin: 0 });
 
-            this.$options = $('<div>').css({
-                'margin-top': '0.5em',
-                'padding-top': '0.5em',
-                'border-top': '1px solid #c8ccd1'
+            var optionsFieldset = new OO.ui.FieldsetLayout({
+                label: 'Opcje',
+                items: [sortField, podField]
             });
-            this.$options.append(sortField.$element, podField.$element);
+            this.$options = $('<div>').css({ 'margin-top': '0.75em' });
+            this.$options.append(optionsFieldset.$element);
 
             this.panel.$element.append(
                 this.filterInput.$element,
