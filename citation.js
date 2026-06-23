@@ -14,7 +14,7 @@
  * strona wkazywana w page, powinna zawierać ksiązki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-06-23 23:42:38+0200
+ * @date 2026-06-24 01:31:51+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
@@ -84,7 +84,10 @@
         BibTool.static.icon = 'references';
         BibTool.static.title = 'Bibliografia';
         BibTool.static.autoAddToCatchall = false;
-        BibTool.prototype.onUpdateState = function () {};
+        BibTool.prototype.onUpdateState = function () {
+            var surface = ve.init.target && ve.init.target.getSurface && ve.init.target.getSurface();
+            this.toggle(!!(surface && surface.getMode() === 'source'));
+        };
         BibTool.prototype.onSelect = function () {
             this.setActive(false);
             var surface = ve.init.target.getSurface();
@@ -105,7 +108,10 @@
         OdnTool.static.icon = 'reference';
         OdnTool.static.title = 'Odnośnik (odn)';
         OdnTool.static.autoAddToCatchall = false;
-        OdnTool.prototype.onUpdateState = function () {};
+        OdnTool.prototype.onUpdateState = function () {
+            var surface = ve.init.target && ve.init.target.getSurface && ve.init.target.getSurface();
+            this.toggle(!!(surface && surface.getMode() === 'source'));
+        };
         OdnTool.prototype.onSelect = function () {
             this.setActive(false);
             var surface = ve.init.target.getSurface();
@@ -548,11 +554,9 @@
 
         BibliographyDialog.prototype._readCurrentSource = function () {
             if (this._surface) {
-                var dom = this._surface.getModel().getDom();
-                return typeof dom === 'string' ? dom : '';
+                return this._surface.getModel().getDom();
             }
-            var $tb = $('#wpTextbox1');
-            return $tb.length ? $tb.textSelection('getContents') : '';
+            return $('#wpTextbox1').textSelection('getContents');
         };
 
         BibliographyDialog.prototype._refreshCleanupAbility = function () {
@@ -630,7 +634,6 @@
                         source = $tb.textSelection('getContents');
                         applyNewSource = function (newSrc) { $tb.textSelection('setContents', newSrc); };
                     }
-                    if (typeof source !== 'string') return;
 
                     var unused = findUnusedRefNames(source);
                     if (!unused.length) {
@@ -981,13 +984,9 @@
     }
 
     function updateBibliography(surface, mainBooks) {
-        if (surface.getMode() !== 'source') {
-            mw.notify('Edycja bibliografii dostępna tylko w edytorze źródłowym.');
-            return;
-        }
         var surfaceModel = surface.getModel();
         var source = surfaceModel.getDom();
-        if (typeof source !== 'string' || !source) return;
+        if (!source) return;
 
         var newSource = buildNewSourceForBooks(source, mainBooks);
 
@@ -1080,20 +1079,7 @@
     // =========================================================================
     /* v8 ignore start -- GUI/API helpers */
     function getPageWikitext(surface) {
-        if (surface.getMode() === 'source') {
-            var raw = surface.getModel().getDom();
-            var text = typeof raw === 'string' ? raw : (raw && raw.textContent) || '';
-            return $.Deferred().resolve(text).promise();
-        }
-        var pageName = mw.config.get('wgPageName');
-        return api.get({
-            action: 'query',
-            prop: 'revisions',
-            rvprop: 'content',
-            titles: pageName
-        }).then(function (data) {
-            return data.query.pages[0].revisions[0].content;
-        });
+        return $.Deferred().resolve(surface.getModel().getDom()).promise();
     }
 
     /* v8 ignore stop */
