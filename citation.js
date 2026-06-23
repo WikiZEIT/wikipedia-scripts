@@ -541,7 +541,23 @@
                         }).text(msg.text);
                         self.$messages.append($msg);
                     });
+
+                    self._refreshCleanupAbility();
                 }, this);
+        };
+
+        BibliographyDialog.prototype._readCurrentSource = function () {
+            if (this._surface) {
+                var dom = this._surface.getModel().getDom();
+                return typeof dom === 'string' ? dom : '';
+            }
+            var $tb = $('#wpTextbox1');
+            return $tb.length ? $tb.textSelection('getContents') : '';
+        };
+
+        BibliographyDialog.prototype._refreshCleanupAbility = function () {
+            var hasUnused = findUnusedRefNames(this._readCurrentSource()).length > 0;
+            this.actions.setAbilities({ cleanup: hasUnused });
         };
 
         BibliographyDialog.prototype.getReadyProcess = function (data) {
@@ -637,6 +653,7 @@
 
                     applyNewSource(removeUnusedReferences(source));
                     mw.notify('Usunięto nieużywane referencje: ' + unused.join(', '));
+                    dialog._refreshCleanupAbility();
                 }, this);
             }
             return BibliographyDialog.super.prototype.getActionProcess.call(this, action);
