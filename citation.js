@@ -1135,10 +1135,13 @@
                 return entry[0].charAt(0) !== '_';
             })
             .map(function (entry) {
-                return ' ' + entry[0] + ' = ' + entry[1];
+                return entry[0] + '=' + entry[1];
             });
         var allParams = positional.concat(named);
-        return '{{' + name + '|' + allParams.join('|') + '}}';
+        if (!allParams.length) {
+            return '{{' + name + '}}';
+        }
+        return '{{' + name + ' |' + allParams.join(' |') + '}}';
     }
 
     /* v8 ignore start -- API/network */
