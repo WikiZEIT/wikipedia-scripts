@@ -14,7 +14,7 @@
  * strona wkazywana w page, powinna zawierać ksiązki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-06-24 12:50:24+0200
+ * @date 2026-06-24 14:13:46+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
@@ -782,7 +782,8 @@
                             'white-space': 'pre-wrap',
                             'word-break': 'break-word',
                             'border-radius': '2px',
-                            'margin-top': '0.25em'
+                            'margin-top': '0.25em',
+                            'color': 'var(--background-color-neutral-subtle,#f8f9fa)'
                         };
                         var $oldLine = $('<div>').css($.extend({}, lineStyles, { 'background-color': '#ffeef0' }));
                         diff.forEach(function (d) {
