@@ -14,7 +14,7 @@
  * strona wkazywana w page, powinna zawierać ksiązki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-06-24 01:31:51+0200
+ * @date 2026-06-24 10:21:46+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
@@ -560,7 +560,9 @@
         };
 
         BibliographyDialog.prototype._refreshCleanupAbility = function () {
-            var hasUnused = findUnusedRefNames(this._readCurrentSource()).length > 0;
+            var source = this._readCurrentSource();
+            var hasUnused = findUnusedRefNames(source).length > 0 ||
+                findUnusedBibliographyBooks(source).length > 0;
             this.actions.setAbilities({ cleanup: hasUnused });
         };
 
@@ -635,13 +637,15 @@
                         applyNewSource = function (newSrc) { $tb.textSelection('setContents', newSrc); };
                     }
 
-                    var unused = findUnusedRefNames(source);
-                    if (!unused.length) {
+                    var unusedRefs = findUnusedRefNames(source);
+                    var unusedBooks = findUnusedBibliographyBooks(source);
+                    if (!unusedRefs.length && !unusedBooks.length) {
                         mw.notify('Brak nieużywanych referencji do usunięcia.');
                         return;
                     }
                     var unusedSet = {};
-                    unused.forEach(function (n) { unusedSet[n] = true; });
+                    unusedRefs.forEach(function (n) { unusedSet[n] = true; });
+                    unusedBooks.forEach(function (b) { unusedSet[refName(b)] = true; });
 
                     // Wpisy szablonu z wieloma wariantami (rozdziały) — uznaj
                     // checkbox za nieużywany jeśli KAŻDY wariant ma niewykorzystaną
@@ -654,8 +658,11 @@
                         }
                     });
 
-                    applyNewSource(removeUnusedReferences(source));
-                    mw.notify('Usunięto nieużywane referencje: ' + unused.join(', '));
+                    var newSource = removeUnusedReferences(source);
+                    newSource = removeUnusedBibliographyEntries(newSource);
+                    applyNewSource(newSource);
+                    var removed = unusedRefs.concat(unusedBooks.map(refName));
+                    mw.notify('Usunięto nieużywane referencje: ' + removed.join(', '));
                     dialog._refreshCleanupAbility();
                 }, this);
             }
@@ -1349,6 +1356,53 @@
         return source.slice(0, blockMatch.index) + newBlock + source.slice(blockMatch.index + blockMatch[0].length);
     }
 
+    function findOdnUsages(source) {
+        if (typeof source !== 'string') return {};
+        var bib = findBibliography(source);
+        var body = bib
+            ? source.slice(0, bib.headerStart) + source.slice(bib.contentEnd)
+            : source;
+        var used = {};
+        body.replace(/\{\{odn\b([^}]*)\}\}/g, function (full, paramsStr) {
+            var params = splitTemplateParams(paramsStr.replace(/^\|/, ''));
+            var positional = params
+                .filter(function (p) { return p.indexOf('=') === -1; })
+                .map(function (p) { return p.trim(); });
+            var name = sanitizeRefName(positional.join('_'));
+            if (name) used[name] = true;
+            return full;
+        });
+        return used;
+    }
+
+    function findUnusedBibliographyBooks(source) {
+        if (typeof source !== 'string') return [];
+        var bib = parseExistingBibliography(source);
+        if (!bib.main.length) return [];
+        var used = findOdnUsages(source);
+        return bib.main.filter(function (book) { return !used[refName(book)]; });
+    }
+
+    function removeUnusedBibliographyEntries(source) {
+        if (typeof source !== 'string') return source;
+        var bib = findBibliography(source);
+        if (!bib) return source;
+        var used = findOdnUsages(source);
+
+        var keptLines = bib.content.split('\n').filter(function (line) {
+            var trimmed = line.replace(/^\s+/, '');
+            if (!trimmed.startsWith('*')) return true;
+            var tplText = trimmed.replace(/^\*\s*/, '');
+            var matches = matchCytujTemplates(tplText);
+            if (!matches.length) return true;
+            var book = parseTemplate(matches[0]);
+            return !!used[refName(book)];
+        });
+        var newContent = keptLines.join('\n').replace(/\n{3,}/g, '\n\n');
+        if (newContent === bib.content) return source;
+        return source.slice(0, bib.contentStart) + newContent + source.slice(bib.contentEnd);
+    }
+
     function migrateOdnToSubRefs(source) {
         if (typeof source !== 'string') return source;
         return source.replace(/\{\{odn\b([^}]*)\}\}/g, function (full, paramsStr) {
@@ -1633,6 +1687,9 @@
         insertReferencesSection: insertReferencesSection,
         migrateOdnToSubRefs: migrateOdnToSubRefs,
         removeUnusedReferences: removeUnusedReferences,
-        findUnusedRefNames: findUnusedRefNames
+        findUnusedRefNames: findUnusedRefNames,
+        findOdnUsages: findOdnUsages,
+        findUnusedBibliographyBooks: findUnusedBibliographyBooks,
+        removeUnusedBibliographyEntries: removeUnusedBibliographyEntries
     };
 })();

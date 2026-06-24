@@ -1581,3 +1581,79 @@ describe('findUnusedRefNames', () => {
         expect(api.findUnusedRefNames(source)).toEqual(['A']);
     });
 });
+
+// =========================================================================
+//  findUnusedBibliographyBooks (legacy odn mode)
+// =========================================================================
+describe('findUnusedBibliographyBooks', () => {
+    it('returns books from == Bibliografia == not cited by any {{odn|...}}', () => {
+        const source = [
+            'Tekst{{odn|Kowalski|2020|s=5}}.',
+            '',
+            '== Bibliografia ==',
+            '* {{Cytuj książkę |nazwisko=Kowalski |rok=2020 |tytuł=Historia}}',
+            '* {{Cytuj książkę |nazwisko=Unused |rok=1900 |tytuł=Stara}}'
+        ].join('\n');
+        const unused = api.findUnusedBibliographyBooks(source);
+        expect(unused).toHaveLength(1);
+        expect(unused[0].nazwisko).toBe('Unused');
+    });
+
+    it('returns empty array when every book is cited', () => {
+        const source = [
+            '{{odn|A|2020}} oraz {{odn|B|2019}}.',
+            '== Bibliografia ==',
+            '* {{Cytuj książkę |nazwisko=A |rok=2020}}',
+            '* {{Cytuj książkę |nazwisko=B |rok=2019}}'
+        ].join('\n');
+        expect(api.findUnusedBibliographyBooks(source)).toEqual([]);
+    });
+
+    it('returns empty array when there is no bibliography section', () => {
+        expect(api.findUnusedBibliographyBooks('Plain text.')).toEqual([]);
+    });
+
+    it('ignores named params (s=N) when computing the citation key', () => {
+        const source = [
+            '{{odn|Wos|2023|s=222}}.',
+            '== Bibliografia ==',
+            '* {{Cytuj książkę |nazwisko=Wos |rok=2023}}'
+        ].join('\n');
+        expect(api.findUnusedBibliographyBooks(source)).toEqual([]);
+    });
+
+    it('treats every book as unused when there are no {{odn}} citations at all', () => {
+        const source = '== Bibliografia ==\n* {{Cytuj książkę |nazwisko=Solo |rok=2020}}';
+        const unused = api.findUnusedBibliographyBooks(source);
+        expect(unused).toHaveLength(1);
+        expect(unused[0].nazwisko).toBe('Solo');
+    });
+});
+
+// =========================================================================
+//  removeUnusedBibliographyEntries (legacy odn mode)
+// =========================================================================
+describe('removeUnusedBibliographyEntries', () => {
+    it('strips bullet lines for books not cited by {{odn|...}}', () => {
+        const source = [
+            'Tekst{{odn|Kowalski|2020|s=5}}.',
+            '',
+            '== Bibliografia ==',
+            '* {{Cytuj książkę |nazwisko=Kowalski |rok=2020 |tytuł=Historia}}',
+            '* {{Cytuj książkę |nazwisko=Unused |rok=1900 |tytuł=Stara}}'
+        ].join('\n');
+        const result = api.removeUnusedBibliographyEntries(source);
+        expect(result).toContain('nazwisko=Kowalski');
+        expect(result).not.toContain('nazwisko=Unused');
+        expect(result).toContain('== Bibliografia ==');
+    });
+
+    it('returns source unchanged when every book is cited', () => {
+        const source = '{{odn|A|2020}}.\n== Bibliografia ==\n* {{Cytuj książkę |nazwisko=A |rok=2020}}\n';
+        expect(api.removeUnusedBibliographyEntries(source)).toBe(source);
+    });
+
+    it('returns source unchanged when there is no Bibliografia section', () => {
+        expect(api.removeUnusedBibliographyEntries('Plain text.')).toBe('Plain text.');
+    });
+});
