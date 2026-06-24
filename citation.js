@@ -1524,15 +1524,22 @@
     //  Normalizacja: porównaj książkę w artykule z odpowiednikiem ze strony
     //  źródłowej i pozwól użytkownikowi wymienić zawartość szablonu.
     // -------------------------------------------------------------------------
+    function normalizationMatchKey(book) {
+        // Refname (nazwisko + rok) sam nie wystarcza: warianty rozdziałów dzielą
+        // ten sam refname, więc musimy uwzględnić `rozdział`, żeby nie skleić
+        // wszystkich rozdziałów do jednej (ostatniej) wersji ze źródła.
+        return refName(book) + '|' + (book['rozdział'] || '');
+    }
+
     function findNormalizationCandidates(articleBooks, sourceBooks) {
         if (!articleBooks || !sourceBooks) return [];
         var bySourceKey = {};
         sourceBooks.forEach(function (sb) {
-            bySourceKey[refName(sb)] = sb;
+            bySourceKey[normalizationMatchKey(sb)] = sb;
         });
         var pairs = [];
         articleBooks.forEach(function (ab) {
-            var src = bySourceKey[refName(ab)];
+            var src = bySourceKey[normalizationMatchKey(ab)];
             if (!src) return;
             // Porównaj formy serializowane (bez metadanych odn / _refName);
             // jeśli różne -> kandydat do normalizacji.

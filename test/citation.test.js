@@ -1693,6 +1693,34 @@ describe('findNormalizationCandidates', () => {
         const sources = [{ _templateName: 'Cytuj książkę', nazwisko: 'A', rok: '2020', tytuł: 'X' }];
         expect(api.findNormalizationCandidates(article, sources)).toEqual([]);
     });
+
+    it('matches variants (rozdział) one-to-one — not all article chapters to the last source variant', () => {
+        const articleBooks = [
+            { _templateName: 'Cytuj książkę', nazwisko: 'Wimmer (red.)', data: '1973', rozdział: 'Operacja A', 'nazwisko r': 'Nowak', wydawca: 'OldPub' },
+            { _templateName: 'Cytuj książkę', nazwisko: 'Wimmer (red.)', data: '1973', rozdział: 'Bitwa B', 'nazwisko r': 'Herbst', wydawca: 'OldPub' }
+        ];
+        const sources = [
+            { _templateName: 'Cytuj książkę', nazwisko: 'Wimmer (red.)', data: '1973', rozdział: 'Operacja A', 'nazwisko r': 'Nowak', wydawca: 'NewPub' },
+            { _templateName: 'Cytuj książkę', nazwisko: 'Wimmer (red.)', data: '1973', rozdział: 'Bitwa B', 'nazwisko r': 'Herbst', wydawca: 'NewPub' }
+        ];
+        const result = api.findNormalizationCandidates(articleBooks, sources);
+        expect(result).toHaveLength(2);
+        // Each article variant must be paired with the SAME-chapter source variant.
+        const opA = result.find(p => p.article.rozdział === 'Operacja A');
+        const bitB = result.find(p => p.article.rozdział === 'Bitwa B');
+        expect(opA.source.rozdział).toBe('Operacja A');
+        expect(bitB.source.rozdział).toBe('Bitwa B');
+    });
+
+    it('skips a variant when no source has the matching rozdział (avoids rewriting one chapter into another)', () => {
+        const articleBooks = [
+            { _templateName: 'Cytuj książkę', nazwisko: 'Wimmer (red.)', data: '1973', rozdział: 'Operacaja A', 'nazwisko r': 'Nowak' }  // typo in rozdział
+        ];
+        const sources = [
+            { _templateName: 'Cytuj książkę', nazwisko: 'Wimmer (red.)', data: '1973', rozdział: 'Operacja A', 'nazwisko r': 'Nowak' }
+        ];
+        expect(api.findNormalizationCandidates(articleBooks, sources)).toEqual([]);
+    });
 });
 
 // =========================================================================
