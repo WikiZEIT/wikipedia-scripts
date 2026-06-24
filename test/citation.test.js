@@ -1657,3 +1657,116 @@ describe('removeUnusedBibliographyEntries', () => {
         expect(api.removeUnusedBibliographyEntries('Plain text.')).toBe('Plain text.');
     });
 });
+
+// =========================================================================
+//  findNormalizationCandidates
+// =========================================================================
+describe('findNormalizationCandidates', () => {
+    it('returns pairs where article and source books share a refName but differ', () => {
+        const articleBooks = [
+            { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', rok: '2020', tytuł: 'Historia Polksi' }
+        ];
+        const sources = [
+            { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', rok: '2020', tytuł: 'Historia Polski' }
+        ];
+        const result = api.findNormalizationCandidates(articleBooks, sources);
+        expect(result).toHaveLength(1);
+        expect(result[0].article.tytuł).toBe('Historia Polksi');
+        expect(result[0].source.tytuł).toBe('Historia Polski');
+    });
+
+    it('skips identical books', () => {
+        const same = { _templateName: 'Cytuj książkę', nazwisko: 'A', rok: '2020', tytuł: 'X' };
+        const result = api.findNormalizationCandidates([same], [{ ...same }]);
+        expect(result).toEqual([]);
+    });
+
+    it('skips books that have no source match (different refName)', () => {
+        const article = [{ nazwisko: 'Solo', rok: '2020', tytuł: 'X' }];
+        const sources = [{ nazwisko: 'Other', rok: '2020', tytuł: 'Y' }];
+        expect(api.findNormalizationCandidates(article, sources)).toEqual([]);
+    });
+
+    it('ignores the odn metadata field when comparing', () => {
+        // article has odn=tak; source does not — should NOT count as a normalization candidate.
+        const article = [{ _templateName: 'Cytuj książkę', nazwisko: 'A', rok: '2020', tytuł: 'X', odn: 'tak' }];
+        const sources = [{ _templateName: 'Cytuj książkę', nazwisko: 'A', rok: '2020', tytuł: 'X' }];
+        expect(api.findNormalizationCandidates(article, sources)).toEqual([]);
+    });
+});
+
+// =========================================================================
+//  tokenize + diffTokens (git-style word diff)
+// =========================================================================
+describe('tokenize', () => {
+    it('splits a string into word, separator and whitespace tokens', () => {
+        expect(api.tokenize('a=b c')).toEqual(['a', '=', 'b', ' ', 'c']);
+    });
+});
+
+describe('diffTokens', () => {
+    it('marks identical tokens as eq', () => {
+        const diff = api.diffTokens('a b c', 'a b c');
+        expect(diff.every(d => d.op === 'eq')).toBe(true);
+    });
+
+    it('marks deleted tokens as del and inserted tokens as ins', () => {
+        const diff = api.diffTokens('historia polksi', 'historia polski');
+        const ops = diff.map(d => d.op);
+        expect(ops).toContain('del');
+        expect(ops).toContain('ins');
+        const del = diff.find(d => d.op === 'del');
+        const ins = diff.find(d => d.op === 'ins');
+        expect(del.token).toBe('polksi');
+        expect(ins.token).toBe('polski');
+    });
+
+    it('handles pure insertion', () => {
+        const diff = api.diffTokens('a c', 'a b c');
+        const insTokens = diff.filter(d => d.op === 'ins').map(d => d.token).sort();
+        expect(insTokens).toEqual([' ', 'b']);
+        expect(diff.some(d => d.op === 'del')).toBe(false);
+    });
+
+    it('handles pure deletion', () => {
+        const diff = api.diffTokens('a b c', 'a c');
+        const delTokens = diff.filter(d => d.op === 'del').map(d => d.token).sort();
+        expect(delTokens).toEqual([' ', 'b']);
+        expect(diff.some(d => d.op === 'ins')).toBe(false);
+    });
+});
+
+// =========================================================================
+//  applyNormalizations
+// =========================================================================
+describe('applyNormalizations', () => {
+    it('replaces an article template with the source template', () => {
+        const source = '== Bibliografia ==\n* {{Cytuj książkę |nazwisko=Kowalski |rok=2020 |tytuł=Historia Polksi |odn=tak}}\n';
+        const norms = [{
+            article: { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', rok: '2020', tytuł: 'Historia Polksi', odn: 'tak' },
+            source: { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', rok: '2020', tytuł: 'Historia Polski' }
+        }];
+        const result = api.applyNormalizations(source, norms);
+        expect(result).toContain('Historia Polski');
+        expect(result).not.toContain('Polksi');
+        // odn=tak should be preserved (the article uses odn mode).
+        expect(result).toContain('odn=tak');
+    });
+
+    it('returns source unchanged when normalizations is empty', () => {
+        const source = '== Bibliografia ==\n* {{Cytuj książkę |nazwisko=A |rok=2020}}\n';
+        expect(api.applyNormalizations(source, [])).toBe(source);
+    });
+
+    it('keeps unrelated text untouched', () => {
+        const source = 'Body{{odn|Kowalski|2020|s=5}}.\n\n== Bibliografia ==\n* {{Cytuj książkę |nazwisko=Kowalski |rok=2020 |tytuł=Old}}\n\n[[Kategoria:Test]]';
+        const norms = [{
+            article: { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', rok: '2020', tytuł: 'Old' },
+            source: { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', rok: '2020', tytuł: 'New' }
+        }];
+        const result = api.applyNormalizations(source, norms);
+        expect(result).toContain('{{odn|Kowalski|2020|s=5}}');
+        expect(result).toContain('[[Kategoria:Test]]');
+        expect(result).toContain('tytuł=New');
+    });
+});

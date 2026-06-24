@@ -14,14 +14,15 @@
  * strona wkazywana w page, powinna zawierać ksiązki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-06-24 10:21:46+0200
+ * @date 2026-06-24 12:22:13+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
     let api;
     let sourceBooks = [];
     let windowManager;
-    let bibDialog, odnDialog;
+    let normalizationManager;
+    let bibDialog, odnDialog, normalizationDialog;
     let codeMirror;
 
     initAPI();
@@ -72,10 +73,16 @@
 
         defineBibliographyDialog();
         defineOdnDialog();
+        defineNormalizationDialog();
 
         bibDialog = new BibliographyDialog();
         odnDialog = new OdnDialog();
         windowManager.addWindows([bibDialog, odnDialog]);
+
+        normalizationManager = new OO.ui.WindowManager();
+        $(document.body).append(normalizationManager.$element);
+        normalizationDialog = new NormalizationDialog();
+        normalizationManager.addWindows([normalizationDialog]);
 
         // Bibliography tool
         function BibTool() { BibTool.super.apply(this, arguments); }
@@ -169,6 +176,7 @@
 
         defineBibliographyDialog();
         defineOdnDialog();
+        defineNormalizationDialog();
 
         mw.util.addCSS(
             'html.skin-theme-clientpref-night #citation-bib-btn,' +
@@ -186,6 +194,11 @@
         bibDialog = new BibliographyDialog();
         odnDialog = new OdnDialog();
         windowManager.addWindows([bibDialog, odnDialog]);
+
+        normalizationManager = new OO.ui.WindowManager();
+        $(document.body).append(normalizationManager.$element);
+        normalizationDialog = new NormalizationDialog();
+        normalizationManager.addWindows([normalizationDialog]);
 
         var $textbox = $('#wpTextbox1');
 
@@ -295,6 +308,7 @@
         BibliographyDialog.static.size = 'medium';
         BibliographyDialog.static.actions = [
             { action: 'save', label: 'Zapisz', flags: ['primary', 'progressive'] },
+            { action: 'normalize', icon: 'editUndo', title: 'Normalizuj bibliografię ze strony źródłowej', flags: 'progressive' },
             { action: 'cleanup', icon: 'trash', title: 'Usuń nieużywane referencje', flags: 'destructive' },
             { label: 'Anuluj', flags: ['safe', 'close'] }
         ];
@@ -563,7 +577,9 @@
             var source = this._readCurrentSource();
             var hasUnused = findUnusedRefNames(source).length > 0 ||
                 findUnusedBibliographyBooks(source).length > 0;
-            this.actions.setAbilities({ cleanup: hasUnused });
+            var existing = parseExistingBibliography(source).main;
+            var hasNorm = findNormalizationCandidates(existing, sourceBooks).length > 0;
+            this.actions.setAbilities({ cleanup: hasUnused, normalize: hasNorm });
         };
 
         BibliographyDialog.prototype.getReadyProcess = function (data) {
@@ -611,6 +627,42 @@
                         mw.notify($('<span>').html(notification.replace(/odn = tak/g, '<code><small>odn = tak</small></code>')));
                     }
                     this.close({ action: 'save' });
+                }, this);
+            }
+            if (action === 'normalize') {
+                var surface = this._surface;
+                var dialog = this;
+                return new OO.ui.Process(function () {
+                    var source = dialog._readCurrentSource();
+                    var existing = parseExistingBibliography(source).main;
+                    var candidates = findNormalizationCandidates(existing, sourceBooks);
+                    if (!candidates.length) {
+                        mw.notify('Brak różnic między bibliografią a stroną źródłową.');
+                        return;
+                    }
+                    var applyFn = function (selected) {
+                        if (!selected.length) return;
+                        var newSource = applyNormalizations(source, selected);
+                        if (newSource === source) return;
+                        if (surface) {
+                            var surfaceModel = surface.getModel();
+                            var range = new ve.Range(1, surfaceModel.getDocument().data.getLength());
+                            if (codeMirror && codeMirror.isActive) {
+                                codeMirror.toggle(false);
+                                surfaceModel.getLinearFragment(range).insertContent(newSource);
+                                codeMirror.toggle(true);
+                            } else {
+                                surfaceModel.getLinearFragment(range).insertContent(newSource);
+                            }
+                        } else {
+                            $('#wpTextbox1').textSelection('setContents', newSource);
+                        }
+                        mw.notify('Znormalizowano ' + selected.length + ' wpis(ów) bibliografii.');
+                    };
+                    normalizationManager.openWindow(normalizationDialog, {
+                        candidates: candidates,
+                        apply: applyFn
+                    });
                 }, this);
             }
             if (action === 'cleanup') {
@@ -667,6 +719,117 @@
                 }, this);
             }
             return BibliographyDialog.super.prototype.getActionProcess.call(this, action);
+        };
+    }
+
+    // =========================================================================
+    //  Normalization Dialog (potwierdzenie zmian z porównaniem git-style)
+    // =========================================================================
+    var NormalizationDialog;
+    function defineNormalizationDialog() {
+        NormalizationDialog = function (config) {
+            NormalizationDialog.super.call(this, config || {});
+        };
+        OO.inheritClass(NormalizationDialog, OO.ui.ProcessDialog);
+
+        NormalizationDialog.static.name = 'normalizationDialog';
+        NormalizationDialog.static.title = 'Normalizacja bibliografii';
+        NormalizationDialog.static.size = 'larger';
+        NormalizationDialog.static.actions = [
+            { action: 'apply', label: 'Zatwierdź', flags: ['primary', 'progressive'] },
+            { label: 'Anuluj', flags: ['safe', 'close'] }
+        ];
+
+        NormalizationDialog.prototype.initialize = function () {
+            NormalizationDialog.super.prototype.initialize.apply(this, arguments);
+            this.panel = new OO.ui.PanelLayout({ padded: true, expanded: false });
+            this.$list = $('<div>');
+            this.panel.$element.append(this.$list);
+            this.$body.append(this.panel.$element);
+        };
+
+        NormalizationDialog.prototype.getBodyHeight = function () {
+            if (this.$body && this.$body[0] && this.$body[0].scrollHeight) {
+                return Math.min(this.$body[0].scrollHeight, 600);
+            }
+            return 400;
+        };
+
+        NormalizationDialog.prototype.getSetupProcess = function (data) {
+            return NormalizationDialog.super.prototype.getSetupProcess.call(this, data)
+                .next(function () {
+                    this._applyFn = data.apply;
+                    this._items = [];
+                    this.$list.empty();
+
+                    var self = this;
+                    data.candidates.forEach(function (c) {
+                        var cb = new OO.ui.CheckboxInputWidget({ selected: true });
+                        var field = new OO.ui.FieldLayout(cb, {
+                            label: bookLabel(c.article),
+                            align: 'inline'
+                        });
+
+                        var oldText = stringifyTemplate(c.article._templateName || 'Cytuj książkę', c.article);
+                        var newText = stringifyTemplate(c.source._templateName || 'Cytuj książkę', c.source);
+                        var diff = diffTokens(oldText, newText);
+
+                        var lineStyles = {
+                            'padding': '0.25em 0.5em',
+                            'font-family': 'monospace',
+                            'font-size': '0.9em',
+                            'white-space': 'pre-wrap',
+                            'word-break': 'break-word',
+                            'border-radius': '2px',
+                            'margin-top': '0.25em'
+                        };
+                        var $oldLine = $('<div>').css($.extend({}, lineStyles, { 'background-color': '#ffeef0' }));
+                        diff.forEach(function (d) {
+                            if (d.op === 'ins') return;
+                            var $tok = $('<span>').text(d.token);
+                            if (d.op === 'del') $tok.css({ 'background-color': '#fdb8c0', color: '#86181d' });
+                            $oldLine.append($tok);
+                        });
+
+                        var $newLine = $('<div>').css($.extend({}, lineStyles, { 'background-color': '#e6ffed' }));
+                        diff.forEach(function (d) {
+                            if (d.op === 'del') return;
+                            var $tok = $('<span>').text(d.token);
+                            if (d.op === 'ins') $tok.css({ 'background-color': '#acf2bd', color: '#22863a' });
+                            $newLine.append($tok);
+                        });
+
+                        var $row = $('<div>').css({
+                            'border': '1px solid #c8ccd1',
+                            'border-radius': '2px',
+                            'padding': '0.75em',
+                            'margin-bottom': '0.75em'
+                        });
+                        $row.append(field.$element, $oldLine, $newLine);
+                        self.$list.append($row);
+                        self._items.push({ checkbox: cb, candidate: c });
+                    });
+                }, this);
+        };
+
+        NormalizationDialog.prototype.getReadyProcess = function (data) {
+            var dialog = this;
+            return NormalizationDialog.super.prototype.getReadyProcess.call(this, data)
+                .next(function () { dialog.updateSize(); });
+        };
+
+        NormalizationDialog.prototype.getActionProcess = function (action) {
+            if (action === 'apply') {
+                var selected = this._items
+                    .filter(function (it) { return it.checkbox.isSelected(); })
+                    .map(function (it) { return it.candidate; });
+                var applyFn = this._applyFn;
+                return new OO.ui.Process(function () {
+                    if (applyFn) applyFn(selected);
+                    this.close({ action: 'apply' });
+                }, this);
+            }
+            return NormalizationDialog.super.prototype.getActionProcess.call(this, action);
         };
     }
 
@@ -1356,6 +1519,93 @@
         return source.slice(0, blockMatch.index) + newBlock + source.slice(blockMatch.index + blockMatch[0].length);
     }
 
+    // -------------------------------------------------------------------------
+    //  Normalizacja: porównaj książkę w artykule z odpowiednikiem ze strony
+    //  źródłowej i pozwól użytkownikowi wymienić zawartość szablonu.
+    // -------------------------------------------------------------------------
+    function findNormalizationCandidates(articleBooks, sourceBooks) {
+        if (!articleBooks || !sourceBooks) return [];
+        var bySourceKey = {};
+        sourceBooks.forEach(function (sb) {
+            bySourceKey[refName(sb)] = sb;
+        });
+        var pairs = [];
+        articleBooks.forEach(function (ab) {
+            var src = bySourceKey[refName(ab)];
+            if (!src) return;
+            // Porównaj formy serializowane (bez metadanych odn / _refName);
+            // jeśli różne -> kandydat do normalizacji.
+            var aText = stringifyTemplate(ab._templateName || 'Cytuj książkę', ab);
+            var sText = stringifyTemplate(src._templateName || 'Cytuj książkę', src);
+            if (normalizeForCompare(aText) !== normalizeForCompare(sText)) {
+                pairs.push({ article: ab, source: src });
+            }
+        });
+        return pairs;
+    }
+
+    function normalizeForCompare(tplText) {
+        // Pomijamy parametry odn = tak / odn = a / odn = {{odn/id|...}},
+        // bo to metadane "odn-mode" — nie chcemy traktować ich obecności
+        // (lub braku) jako różnicy wymagającej normalizacji.
+        return tplText.replace(/\s*\|odn=[^|}]*/g, '');
+    }
+
+    function tokenize(s) {
+        return String(s).match(/\w+|[^\w\s]+|\s+/g) || [];
+    }
+
+    function diffTokens(oldStr, newStr) {
+        var a = tokenize(oldStr);
+        var b = tokenize(newStr);
+        var m = a.length, n = b.length;
+        // Tablica LCS — krótkie szablony (do ~kilkuset tokenów) → O(m*n) jest OK.
+        var dp = [];
+        for (var i = 0; i <= m; i++) dp.push(new Array(n + 1).fill(0));
+        for (i = 1; i <= m; i++) {
+            for (var j = 1; j <= n; j++) {
+                dp[i][j] = a[i - 1] === b[j - 1]
+                    ? dp[i - 1][j - 1] + 1
+                    : Math.max(dp[i - 1][j], dp[i][j - 1]);
+            }
+        }
+        var result = [];
+        i = m; j = n;
+        while (i > 0 || j > 0) {
+            if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+                result.unshift({ token: a[i - 1], op: 'eq' });
+                i--; j--;
+            } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+                result.unshift({ token: b[j - 1], op: 'ins' });
+                j--;
+            } else {
+                result.unshift({ token: a[i - 1], op: 'del' });
+                i--;
+            }
+        }
+        return result;
+    }
+
+    function applyNormalizations(source, normalizations) {
+        if (typeof source !== 'string' || !normalizations || !normalizations.length) {
+            return source;
+        }
+        var result = source;
+        normalizations.forEach(function (n) {
+            var oldText = stringifyTemplate(n.article._templateName || 'Cytuj książkę', n.article);
+            // Zachowaj odn= z artykułu (np. odn=tak), bo to metadane odn-mode
+            // potrzebne przez {{odn|...}} w treści, a strona źródłowa go nie ma.
+            var sourceBook = {};
+            Object.keys(n.source).forEach(function (k) { sourceBook[k] = n.source[k]; });
+            if (n.article.odn !== undefined && sourceBook.odn === undefined) {
+                sourceBook.odn = n.article.odn;
+            }
+            var newText = stringifyTemplate(sourceBook._templateName || 'Cytuj książkę', sourceBook);
+            result = result.split(oldText).join(newText);
+        });
+        return result;
+    }
+
     function findOdnUsages(source) {
         if (typeof source !== 'string') return {};
         var bib = findBibliography(source);
@@ -1690,6 +1940,10 @@
         findUnusedRefNames: findUnusedRefNames,
         findOdnUsages: findOdnUsages,
         findUnusedBibliographyBooks: findUnusedBibliographyBooks,
-        removeUnusedBibliographyEntries: removeUnusedBibliographyEntries
+        removeUnusedBibliographyEntries: removeUnusedBibliographyEntries,
+        findNormalizationCandidates: findNormalizationCandidates,
+        tokenize: tokenize,
+        diffTokens: diffTokens,
+        applyNormalizations: applyNormalizations
     };
 })();
