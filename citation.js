@@ -14,7 +14,7 @@
  * strona wkazywana w page, powinna zawierać ksiązki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-06-24 12:22:13+0200
+ * @date 2026-06-24 12:50:24+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
@@ -577,7 +577,7 @@
             var source = this._readCurrentSource();
             var hasUnused = findUnusedRefNames(source).length > 0 ||
                 findUnusedBibliographyBooks(source).length > 0;
-            var existing = parseExistingBibliography(source).main;
+            var existing = readAllBibliography(source).main;
             var hasNorm = findNormalizationCandidates(existing, sourceBooks).length > 0;
             this.actions.setAbilities({ cleanup: hasUnused, normalize: hasNorm });
         };
@@ -634,7 +634,7 @@
                 var dialog = this;
                 return new OO.ui.Process(function () {
                     var source = dialog._readCurrentSource();
-                    var existing = parseExistingBibliography(source).main;
+                    var existing = readAllBibliography(source).main;
                     var candidates = findNormalizationCandidates(existing, sourceBooks);
                     if (!candidates.length) {
                         mw.notify('Brak różnic między bibliografią a stroną źródłową.');
@@ -771,7 +771,8 @@
                         });
 
                         var oldText = stringifyTemplate(c.article._templateName || 'Cytuj książkę', c.article);
-                        var newText = stringifyTemplate(c.source._templateName || 'Cytuj książkę', c.source);
+                        var effectiveSource = normalizedSourceBook(c.article, c.source);
+                        var newText = stringifyTemplate(effectiveSource._templateName || 'Cytuj książkę', effectiveSource);
                         var diff = diffTokens(oldText, newText);
 
                         var lineStyles = {
@@ -1586,6 +1587,19 @@
         return result;
     }
 
+    function normalizedSourceBook(article, source) {
+        var book = {};
+        Object.keys(source).forEach(function (k) { book[k] = source[k]; });
+        if (article.odn !== undefined && book.odn === undefined) {
+            // Artykuł używa trybu odn (odn=tak), źródło nie — zachowaj flagę.
+            book.odn = article.odn;
+        } else if (article.odn === undefined && book.odn !== undefined) {
+            // Artykuł używa sub-ref (brak odn), źródło ma odn=tak — usuń.
+            delete book.odn;
+        }
+        return book;
+    }
+
     function applyNormalizations(source, normalizations) {
         if (typeof source !== 'string' || !normalizations || !normalizations.length) {
             return source;
@@ -1593,13 +1607,7 @@
         var result = source;
         normalizations.forEach(function (n) {
             var oldText = stringifyTemplate(n.article._templateName || 'Cytuj książkę', n.article);
-            // Zachowaj odn= z artykułu (np. odn=tak), bo to metadane odn-mode
-            // potrzebne przez {{odn|...}} w treści, a strona źródłowa go nie ma.
-            var sourceBook = {};
-            Object.keys(n.source).forEach(function (k) { sourceBook[k] = n.source[k]; });
-            if (n.article.odn !== undefined && sourceBook.odn === undefined) {
-                sourceBook.odn = n.article.odn;
-            }
+            var sourceBook = normalizedSourceBook(n.article, n.source);
             var newText = stringifyTemplate(sourceBook._templateName || 'Cytuj książkę', sourceBook);
             result = result.split(oldText).join(newText);
         });

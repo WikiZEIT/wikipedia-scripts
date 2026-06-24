@@ -1758,6 +1758,30 @@ describe('applyNormalizations', () => {
         expect(api.applyNormalizations(source, [])).toBe(source);
     });
 
+    it('replaces a sub-ref body inside <references> while preserving the wrapper', () => {
+        const source = '<references>\n<ref name="K_2020">{{Cytuj książkę |nazwisko=Kowalski |rok=2020 |tytuł=Polksi}}</ref>\n</references>';
+        const norms = [{
+            article: { _templateName: 'Cytuj książkę', _refName: 'K_2020', nazwisko: 'Kowalski', rok: '2020', tytuł: 'Polksi' },
+            source: { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', rok: '2020', tytuł: 'Polski' }
+        }];
+        const result = api.applyNormalizations(source, norms);
+        expect(result).toContain('tytuł=Polski');
+        expect(result).not.toContain('Polksi');
+        expect(result).toContain('<ref name="K_2020">');
+        expect(result).toContain('</ref>');
+    });
+
+    it('does not leak odn=tak into a sub-ref article when the source page uses odn mode', () => {
+        const source = '<references>\n<ref name="K_2020">{{Cytuj książkę |nazwisko=Kowalski |rok=2020 |tytuł=Polksi}}</ref>\n</references>';
+        const norms = [{
+            article: { _templateName: 'Cytuj książkę', _refName: 'K_2020', nazwisko: 'Kowalski', rok: '2020', tytuł: 'Polksi' },
+            source: { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', rok: '2020', tytuł: 'Polski', odn: 'tak' }
+        }];
+        const result = api.applyNormalizations(source, norms);
+        expect(result).toContain('tytuł=Polski');
+        expect(result).not.toContain('odn=tak');
+    });
+
     it('keeps unrelated text untouched', () => {
         const source = 'Body{{odn|Kowalski|2020|s=5}}.\n\n== Bibliografia ==\n* {{Cytuj książkę |nazwisko=Kowalski |rok=2020 |tytuł=Old}}\n\n[[Kategoria:Test]]';
         const norms = [{
