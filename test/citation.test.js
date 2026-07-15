@@ -1329,6 +1329,20 @@ describe('refName', () => {
     it('handles _positional identifiers', () => {
         expect(api.refName({ _positional: ['Wimmer2018', 'rozdz. 3'] })).toBe('Wimmer2018_rozdz_3');
     });
+
+    it('falls back to surnames from autor when no nazwisko fields', () => {
+        expect(api.refName({ autor: 'Dawn Griffiths, Przemysław Janicki', data: '2010' }))
+            .toBe('Griffiths_Janicki_2010');
+    });
+
+    it('never produces a purely numeric name (MediaWiki rejects those)', () => {
+        expect(api.refName({ data: '2010' })).not.toMatch(/^\d+$/);
+        expect(api.refName({ rok: '1999' })).not.toMatch(/^\d+$/);
+    });
+
+    it('never produces an empty name', () => {
+        expect(api.refName({ tytuł: 'Bez autora i roku' })).toBeTruthy();
+    });
 });
 
 // =========================================================================
@@ -1458,6 +1472,26 @@ describe('insertReferencesSection', () => {
         const result = api.insertReferencesSection(source, books);
         expect(result).toContain('=== Przypisy ===');
         expect(result).toContain('<references>');
+    });
+
+    it('preserves trailing templates and categories after the Bibliografia section', () => {
+        const source = [
+            '== Przypisy ==',
+            '{{Przypisy}}',
+            '',
+            '== Bibliografia ==',
+            '* {{Cytuj |autor=Dawn Griffiths |tytuł=Statystyka |data=2010}}',
+            '',
+            '{{Kontrola autorytatywna}}',
+            '',
+            '[[Kategoria:Kwantyle]]',
+            ''
+        ].join('\n');
+        const result = api.insertReferencesSection(source, books);
+        expect(result).not.toContain('== Bibliografia ==');
+        expect(result).toContain('<references>');
+        expect(result).toContain('{{Kontrola autorytatywna}}');
+        expect(result).toContain('[[Kategoria:Kwantyle]]');
     });
 });
 

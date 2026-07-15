@@ -14,7 +14,7 @@
  * strona wkazywana w page, powinna zawierać ksiązki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-06-24 14:13:46+0200
+ * @date 2026-07-15 21:07:43+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
@@ -1048,29 +1048,38 @@
         return before + '\n\n' + przypisySection + '\n' + source.slice(bib.headerStart);
     }
 
+    // Rozdziel zawartość sekcji Bibliografia na: część po ostatnim wpisie `*`
+    // (szablony nawigacyjne, kategorie itp.) oraz podsekcje `=== ... ===`.
+    // Używane przy zapisie (zachowanie stopki) i przy migracji do podprzypisów.
+    function splitBibliographyContent(content) {
+        var subIdx = content.search(/^===/m);
+        var mainContent = subIdx !== -1 ? content.slice(0, subIdx) : content;
+        var subPart = subIdx !== -1 ? content.slice(subIdx) : '';
+
+        var lines = mainContent.split('\n');
+        var lastEntryIdx = -1;
+        for (var i = 0; i < lines.length; i++) {
+            if (/^\*/.test(lines[i])) {
+                lastEntryIdx = i;
+            }
+        }
+
+        var trailing = '';
+        if (lastEntryIdx !== -1 && lastEntryIdx < lines.length - 1) {
+            trailing = lines.slice(lastEntryIdx + 1).join('\n');
+        } else if (lastEntryIdx === -1) {
+            trailing = mainContent;
+        }
+        return { trailing: trailing, subPart: subPart };
+    }
+
     function insertBibliographySection(source, bibEntries) {
         var bib = findBibliography(source);
 
         if (bib) {
-            var content = bib.content;
-            var subIdx = content.search(/^===/m);
-            var mainContent = subIdx !== -1 ? content.slice(0, subIdx) : content;
-            var subPart = subIdx !== -1 ? content.slice(subIdx) : '';
-
-            var lines = mainContent.split('\n');
-            var lastEntryIdx = -1;
-            for (var i = 0; i < lines.length; i++) {
-                if (/^\*/.test(lines[i])) {
-                    lastEntryIdx = i;
-                }
-            }
-
-            var trailing = '';
-            if (lastEntryIdx !== -1 && lastEntryIdx < lines.length - 1) {
-                trailing = lines.slice(lastEntryIdx + 1).join('\n');
-            } else if (lastEntryIdx === -1) {
-                trailing = mainContent;
-            }
+            var split = splitBibliographyContent(bib.content);
+            var trailing = split.trailing;
+            var subPart = split.subPart;
 
             var newMain = bibEntries ? bibEntries + '\n' : '';
 
@@ -1351,6 +1360,18 @@
             .replace(/^_+|_+$/g, '');
     }
 
+    function authorSurnames(autor) {
+        // Wyodrębnij nazwiska z pola `autor` (np. "Dawn Griffiths, Jan Kowalski"
+        // → ["Griffiths", "Kowalski"]) — ostatni wyraz każdego autora.
+        return stripLinks(String(autor))
+            .split(/[,;]/)
+            .map(function (a) {
+                var words = a.trim().split(/\s+/).filter(Boolean);
+                return words[words.length - 1] || '';
+            })
+            .filter(Boolean);
+    }
+
     function refName(book) {
         if (book._positional) {
             return sanitizeRefName(book._positional.join('_'));
@@ -1364,6 +1385,11 @@
             }).sort();
         }
         var parts = nKeys.map(function (k) { return book[k]; });
+        // Brak pól nazwisko/imię (np. tylko `autor`) — użyj nazwisk z `autor`,
+        // inaczej nazwa zostałaby zbudowana z samego roku.
+        if (!parts.length && book.autor) {
+            parts = authorSurnames(book.autor);
+        }
         var year = book.rok || book.data || '';
         if (year) {
             var odn = book.odn || '';
@@ -1372,7 +1398,15 @@
             }
             parts.push(year);
         }
-        return sanitizeRefName(parts.join('_'));
+        var name = sanitizeRefName(parts.join('_'));
+        // Nazwa referencji nie może być pusta ani samą liczbą — MediaWiki
+        // odrzuca czysto liczbowe nazwy <ref> ("Cite error"). Dodaj przedrostek.
+        if (!name) {
+            name = 'ref';
+        } else if (/^\d+$/.test(name)) {
+            name = 'ref_' + name;
+        }
+        return name;
     }
 
     function buildSubRefString(book, page) {
@@ -1421,10 +1455,17 @@
     function removeBibliographySection(source) {
         var bib = findBibliography(source);
         if (!bib) return source;
-        // Usuń całą sekcję: nagłówek + zawartość + ewentualną pustą linię przed/po.
+        // Usuń nagłówek i wpisy bibliografii, ale zachowaj treść po nich
+        // (szablony nawigacyjne, kategorie, podsekcje) — inaczej migracja
+        // do podprzypisów zjadłaby stopkę artykułu.
+        var split = splitBibliographyContent(bib.content);
+        var preserved = (split.trailing + split.subPart).replace(/^\s+|\s+$/g, '');
         var before = source.slice(0, bib.headerStart).replace(/\s+$/, '');
-        var after = source.slice(bib.contentEnd).replace(/^\s+/, '\n');
-        return before + (after.startsWith('\n') ? '\n' + after : after);
+        var after = source.slice(bib.contentEnd).replace(/^\s+|\s+$/g, '');
+        var tail = '';
+        if (preserved) tail += '\n\n' + preserved;
+        if (after) tail += '\n\n' + after;
+        return before + tail + '\n';
     }
 
     function insertReferencesSection(source, books) {
