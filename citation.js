@@ -14,7 +14,7 @@
  * strona wkazywana w page, powinna zawierać ksiązki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-07-15 21:07:43+0200
+ * @date 2026-07-15 21:40:26+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
@@ -1375,6 +1375,13 @@
     function refName(book) {
         if (book._positional) {
             return sanitizeRefName(book._positional.join('_'));
+        }
+        // Własna kotwica {{odn/id|...}} nadpisuje domyślny identyfikator — nazwa
+        // referencji musi z niej wynikać, żeby definicja <ref name> zgadzała się
+        // z użyciem generowanym z {{odn|...}} w treści (patrz migrateOdnToSubRefs).
+        var odnId = book.odn && book.odn.match(/\{\{odn\/id\|([^}]+)\}\}/);
+        if (odnId) {
+            return sanitizeRefName(odnId[1].split('|').join('_'));
         }
         var nKeys = Object.keys(book).filter(function (k) {
             return k.indexOf('nazwisko') === 0 && !/^nazwisko r/.test(k);

@@ -1343,6 +1343,22 @@ describe('refName', () => {
     it('never produces an empty name', () => {
         expect(api.refName({ tytuł: 'Bez autora i roku' })).toBeTruthy();
     });
+
+    it('derives the name from {{odn/id|...}} anchor when present', () => {
+        expect(api.refName({ autor: 'Thomas H. Cormen', rok: '2007', odn: '{{odn/id|Thomas H. Cormen, Charles E. Leiserson}}' }))
+            .toBe('Thomas_H_Cormen_Charles_E_Leiserson');
+    });
+
+    it('matches the name migrateOdnToSubRefs produces for the same anchor', () => {
+        const anchor = 'Thomas H. Cormen, Charles E. Leiserson, Ronald L. Rivest, Clifford Stein';
+        const book = { autor: 'Thomas H. Cormen', rok: '2007', odn: '{{odn/id|' + anchor + '}}' };
+        const body = api.migrateOdnToSubRefs('Tekst{{odn|' + anchor + '|s=22}}.');
+        expect(body).toContain('<ref name="' + api.refName(book) + '"');
+    });
+
+    it('supports a second {{odn/id|A|B}} parameter', () => {
+        expect(api.refName({ odn: '{{odn/id|Wimmer|2018}}' })).toBe('Wimmer_2018');
+    });
 });
 
 // =========================================================================
