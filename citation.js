@@ -5,13 +5,14 @@
  *   2. Odn - wstawia szablon {{odn}} w miejsce kursora
  *
  * działa w edytorze kodu 2017 oraz w starym edytorze WikiEditor (2010)
+ * dokumentacja skryptu: [[Wikipedia:Narzędzia/CitationHelper]]
  *
  * konfiguracja:
  * var  citationHelper = {
  *   page: 'Wikipedysta:<user>/brudnopis'
  * };
  *
- * strona wkazywana w page, powinna zawierać ksiązki używające szablonów {{Cytuj ...}}
+ * strona wkazywana w page, powinna zawierać książki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
  * @date 2026-10-10 21:40:00+0200
