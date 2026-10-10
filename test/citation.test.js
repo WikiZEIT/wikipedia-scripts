@@ -765,6 +765,33 @@ describe('insertBibliographySection', () => {
         expect(matches).toHaveLength(1);
     });
 
+    it('does not add a second Przypisy when the article has one but no Bibliografia', () => {
+        const source = [
+            '== Zobacz też ==',
+            '* [[Bertrand Russell]]',
+            '* [[Ludwig Wittgenstein]]',
+            '',
+            '== Przypisy ==',
+            '{{Przypisy}}',
+            '',
+            '== Linki zewnętrzne ==',
+            '* {{MacTutor|id=Frege}}'
+        ].join('\n');
+        const result = api.insertBibliographySection(source, kowalskiEntry);
+        expect(result.match(/== Przypisy ==/g)).toHaveLength(1);
+        expect(result.match(/\{\{Przypisy\}\}/g)).toHaveLength(1);
+        expect(result).toContain('== Bibliografia ==');
+        expect(result.indexOf('== Bibliografia ==')).toBeGreaterThan(result.indexOf('== Przypisy =='));
+        expect(result.indexOf('== Bibliografia ==')).toBeLessThan(result.indexOf('== Linki zewnętrzne =='));
+    });
+
+    it('keeps a lone {{Przypisy}} without a section header from being duplicated', () => {
+        const source = 'Tekst artykułu.<ref>Źródło</ref>\n\n{{Przypisy}}\n\n[[Kategoria:A]]';
+        const result = api.insertBibliographySection(source, kowalskiEntry);
+        expect(result.match(/\{\{Przypisy\}\}/g)).toHaveLength(1);
+        expect(result).toContain('== Bibliografia ==');
+    });
+
     it('preserves subsections within bibliography', () => {
         const source = [
             '== Bibliografia ==',

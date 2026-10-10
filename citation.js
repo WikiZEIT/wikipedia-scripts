@@ -1027,8 +1027,17 @@
         return 3;
     }
 
+    // Lista przypisów już jest, jeśli artykuł ma sekcję Przypisy albo sam
+    // szablon/znacznik renderujący przypisy (bez nagłówka).
+    function hasPrzypisy(source) {
+        if (typeof source !== 'string') return false;
+        return /^={2,3}\s*Przypisy\s*={2,3}\s*$/m.test(source) ||
+            /\{\{\s*[Pp]rzypisy\b/.test(source) ||
+            /<references\b/i.test(source);
+    }
+
     function ensurePrzypisy(source) {
-        if (/^={2,3}\s*Przypisy\s*={2,3}\s*$/m.test(source)) return source;
+        if (hasPrzypisy(source)) return source;
         var bib = findBibliography(source);
         if (!bib) return source;
         var marker = bib.level === 3 ? '===' : '==';
@@ -1081,7 +1090,8 @@
 
         var insertLevel = detectInsertLevel(source);
         var marker = insertLevel === 3 ? '===' : '==';
-        var section = marker + ' Przypisy ' + marker + '\n{{Przypisy}}\n\n' + marker + ' Bibliografia ' + marker + '\n' + bibEntries + '\n';
+        // Sekcję Przypisy dokłada ensurePrzypisy — tylko gdy artykuł jej nie ma.
+        var section = marker + ' Bibliografia ' + marker + '\n' + bibEntries + '\n';
         var pos = findEndOfArticlePos(source);
 
         if (pos !== -1) {
