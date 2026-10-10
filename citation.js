@@ -543,23 +543,12 @@
                     });
 
                     var duplicates = findDuplicateBooks(sourceBooks);
-                    var messages = [];
                     duplicates.forEach(function (dup) {
-                        messages.push({
+                        var message = new OO.ui.MessageWidget({
                             type: 'warning',
-                            text: 'Duplikat: ' + dup.label + ' (' + dup.count + ' kopie bez rozróżnienia)'
+                            label: 'Duplikat: ' + dup.label + ' (' + dup.count + ' kopie bez rozróżnienia)'
                         });
-                    });
-                    messages.forEach(function (msg) {
-                        var $msg = $('<div>').css({
-                            'padding': '0.5em',
-                            'margin-top': '0.5em',
-                            'background-color': msg.type === 'warning' ? '#fef6e7' : '#f8f9fa',
-                            'border': '1px solid ' + (msg.type === 'warning' ? '#fc3' : '#a2a9b1'),
-                            'border-radius': '2px',
-                            'font-size': '0.9em'
-                        }).text(msg.text);
-                        self.$messages.append($msg);
+                        self.$messages.append(message.$element);
                     });
 
                     self._refreshCleanupAbility();
