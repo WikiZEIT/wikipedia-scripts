@@ -8,13 +8,13 @@
  *
  * konfiguracja:
  * var  citationHelper = {
- *   page: 'Wikipedysta/<user>/brudnopis'
+ *   page: 'Wikipedysta:<user>/brudnopis'
  * };
  *
  * strona wkazywana w page, powinna zawierać ksiązki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-07-15 21:40:26+0200
+ * @date 2026-10-10 21:40:00+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
@@ -22,7 +22,7 @@
     let sourceBooks = [];
     let windowManager;
     let normalizationManager;
-    let bibDialog, odnDialog, normalizationDialog;
+    let bibDialog, odnDialog, inlineRefDialog, normalizationDialog;
     let codeMirror;
 
     initAPI();
@@ -73,11 +73,16 @@
 
         defineBibliographyDialog();
         defineOdnDialog();
+        defineInlineRefDialog();
         defineNormalizationDialog();
+
+        // Ikona `book` dla przycisku przypisu — VE nie ładuje tego pakietu sam.
+        mw.loader.load('oojs-ui.styles.icons-content');
 
         bibDialog = new BibliographyDialog();
         odnDialog = new OdnDialog();
-        windowManager.addWindows([bibDialog, odnDialog]);
+        inlineRefDialog = new InlineRefDialog();
+        windowManager.addWindows([bibDialog, odnDialog, inlineRefDialog]);
 
         normalizationManager = new OO.ui.WindowManager();
         $(document.body).append(normalizationManager.$element);
@@ -108,6 +113,34 @@
             });
         };
 
+        // Dialogi wstawiające pojedynczą referencję w miejscu kursora —
+        // kursor wraca za wstawiony tekst po zamknięciu okna.
+        function openInsertDialog(dialog, booksPromise) {
+            var surface = ve.init.target.getSurface();
+            var surfaceModel = surface.getModel();
+            var fragment = surfaceModel.getFragment();
+            surface.getView().deactivate(false);
+            $.when(booksPromise).then(function (books) {
+                var instance = windowManager.openWindow(dialog, {
+                    surface: surface,
+                    books: books,
+                    fragment: fragment
+                });
+                instance.closed.then(function () {
+                    surface.getView().activate(true);
+                    if (dialog._savedEndPos) {
+                        surfaceModel.setLinearSelection(new ve.Range(dialog._savedEndPos));
+                        dialog._savedEndPos = null;
+                    }
+                    if (codeMirror) {
+                        codeMirror.focus();
+                    } else {
+                        surface.getView().$attachedRootNode[0].focus();
+                    }
+                });
+            });
+        }
+
         // Odn tool
         function OdnTool() { OdnTool.super.apply(this, arguments); }
         OO.inheritClass(OdnTool, OO.ui.Tool);
@@ -122,36 +155,38 @@
         OdnTool.prototype.onSelect = function () {
             this.setActive(false);
             var surface = ve.init.target.getSurface();
-            var surfaceModel = surface.getModel();
-            var fragment = surfaceModel.getFragment();
-            surface.getView().deactivate(false);
-            getPageWikitext(surface).then(function (source) {
+            var books = getPageWikitext(surface).then(function (source) {
                 var result = readAllBibliography(source);
-                var pageBooks = result.main.concat(result.nested);
-                var instance = windowManager.openWindow(odnDialog, { surface: surface, books: pageBooks, fragment: fragment });
-                instance.closed.then(function () {
-                    surface.getView().activate(true);
-                    if (odnDialog._savedEndPos) {
-                        surfaceModel.setLinearSelection(new ve.Range(odnDialog._savedEndPos));
-                        odnDialog._savedEndPos = null;
-                    }
-                    if (codeMirror) {
-                        codeMirror.focus();
-                    } else {
-                        surface.getView().$attachedRootNode[0].focus();
-                    }
-                });
+                return result.main.concat(result.nested);
             });
+            openInsertDialog(odnDialog, books);
+        };
+
+        // Inline reference tool
+        function InlineRefTool() { InlineRefTool.super.apply(this, arguments); }
+        OO.inheritClass(InlineRefTool, OO.ui.Tool);
+        InlineRefTool.static.name = 'inlineRefTool';
+        InlineRefTool.static.icon = 'book';
+        InlineRefTool.static.title = 'Przypis z książką';
+        InlineRefTool.static.autoAddToCatchall = false;
+        InlineRefTool.prototype.onUpdateState = function () {
+            var surface = ve.init.target && ve.init.target.getSurface && ve.init.target.getSurface();
+            this.toggle(!!(surface && surface.getMode() === 'source'));
+        };
+        InlineRefTool.prototype.onSelect = function () {
+            this.setActive(false);
+            openInsertDialog(inlineRefDialog, sourceBooks);
         };
 
         // Register tools and add to toolbar
         ve.ui.toolFactory.register(BibTool);
         ve.ui.toolFactory.register(OdnTool);
+        ve.ui.toolFactory.register(InlineRefTool);
 
         var toolbar = ve.init.target.getToolbar();
 
         var toolGroup = new OO.ui.BarToolGroup(toolbar, {
-            include: ['bibliographyTool', 'odnTool']
+            include: ['bibliographyTool', 'odnTool', 'inlineRefTool']
         });
         toolbar.addItems([toolGroup]);
 
@@ -176,16 +211,19 @@
 
         defineBibliographyDialog();
         defineOdnDialog();
+        defineInlineRefDialog();
         defineNormalizationDialog();
 
         mw.util.addCSS(
             'html.skin-theme-clientpref-night #citation-bib-btn,' +
-            'html.skin-theme-clientpref-night #citation-odn-btn {' +
+            'html.skin-theme-clientpref-night #citation-odn-btn,' +
+            'html.skin-theme-clientpref-night #citation-ref-btn {' +
             '  filter: invert(1) hue-rotate(180deg);' +
             '}' +
             '@media (prefers-color-scheme: dark) {' +
             '  html.skin-theme-clientpref-os #citation-bib-btn,' +
-            '  html.skin-theme-clientpref-os #citation-odn-btn {' +
+            '  html.skin-theme-clientpref-os #citation-odn-btn,' +
+            '  html.skin-theme-clientpref-os #citation-ref-btn {' +
             '    filter: invert(1) hue-rotate(180deg);' +
             '  }' +
             '}'
@@ -193,7 +231,8 @@
 
         bibDialog = new BibliographyDialog();
         odnDialog = new OdnDialog();
-        windowManager.addWindows([bibDialog, odnDialog]);
+        inlineRefDialog = new InlineRefDialog();
+        windowManager.addWindows([bibDialog, odnDialog, inlineRefDialog]);
 
         normalizationManager = new OO.ui.WindowManager();
         $(document.body).append(normalizationManager.$element);
@@ -232,6 +271,21 @@
                 windowManager.openWindow(odnDialog, {
                     surface: null,
                     books: pageBooks,
+                    fragment: null
+                });
+            }
+        });
+
+        toolbarGadget.addButton({
+            title: 'Przypis z książką',
+            alt: 'Ref',
+            id: 'citation-ref-btn',
+            oldIcon: 'https://upload.wikimedia.org/wikipedia/commons/8/8f/OOjs_UI_icon_book-ltr.svg',
+            newIcon: 'https://upload.wikimedia.org/wikipedia/commons/8/8f/OOjs_UI_icon_book-ltr.svg',
+            onclick: function () {
+                windowManager.openWindow(inlineRefDialog, {
+                    surface: null,
+                    books: sourceBooks,
                     fragment: null
                 });
             }
@@ -288,9 +342,8 @@
         return { main: main, nested: legacy.nested };
     }
 
-    function insertOdnWikiEditor(book, page) {
-        var $textbox = $('#wpTextbox1');
-        $textbox.textSelection('replaceSelection', buildReferenceString(book, page));
+    function insertAtCursorWikiEditor(text) {
+        $('#wpTextbox1').textSelection('replaceSelection', text);
     }
 
     // =========================================================================
@@ -825,6 +878,87 @@
     }
 
     // =========================================================================
+    //  Book selector — filtrowana lista książek wspólna dla dialogów
+    //  wstawiających pojedynczą referencję (Odn i Przypis).
+    // =========================================================================
+    function BookSelector() {
+        this.filterInput = new OO.ui.TextInputWidget({
+            placeholder: 'Filtruj...',
+            icon: 'search'
+        });
+        this.bookSelect = new OO.ui.RadioSelectWidget();
+        this.bookSelect.$element.css({ 'max-height': '300px', 'overflow-y': 'auto' });
+        this.filterInput.on('change', this._onFilterChange.bind(this));
+        this._books = [];
+        this._options = [];
+    }
+
+    BookSelector.prototype.setBooks = function (books) {
+        this._books = books || [];
+        var labels = bookOptionLabels(this._books);
+        this.filterInput.setValue('');
+
+        this._options = this._books.map(function (book, i) {
+            // Autorzy rozdziałów nie są w etykiecie, ale mają być wyszukiwalni.
+            var searchText = labels[i].toLowerCase();
+            var chapterAuthors = Object.keys(book).filter(function (key) {
+                return /^nazwisko r/.test(key);
+            }).map(function (key) { return book[key].toLowerCase(); });
+            if (chapterAuthors.length) {
+                searchText += ' ' + chapterAuthors.join(' ');
+            }
+            return {
+                widget: new OO.ui.RadioOptionWidget({ data: i, label: labels[i] }),
+                label: searchText
+            };
+        });
+
+        this.bookSelect.clearItems();
+        var widgets = this._options.map(function (o) { return o.widget; });
+        this.bookSelect.addItems(widgets);
+        if (widgets.length) {
+            this.bookSelect.selectItem(widgets[0]);
+        }
+    };
+
+    BookSelector.prototype.getSelectedBook = function () {
+        var item = this.bookSelect.findSelectedItem();
+        return item ? this._books[item.getData()] : null;
+    };
+
+    BookSelector.prototype.focus = function () {
+        var input = this.filterInput;
+        setTimeout(function () { input.focus(); }, 200);
+    };
+
+    BookSelector.prototype.appendTo = function ($element) {
+        $element.append(
+            new OO.ui.FieldLayout(this.filterInput, { label: 'Szukaj książki', align: 'top' }).$element,
+            new OO.ui.FieldLayout(this.bookSelect, { label: 'Książka', align: 'top' }).$element
+        );
+    };
+
+    BookSelector.prototype._onFilterChange = function (value) {
+        var query = value.toLowerCase().trim();
+        var firstVisible = null;
+        var selectedItem = this.bookSelect.findSelectedItem();
+        var selectedHidden = false;
+        this._options.forEach(function (o) {
+            var match = !query || o.label.indexOf(query) !== -1;
+            o.widget.toggle(match);
+            if (match && !firstVisible) {
+                firstVisible = o.widget;
+            }
+            if (o.widget === selectedItem && !match) {
+                selectedHidden = true;
+            }
+        });
+        if (firstVisible && (!selectedItem || selectedHidden)) {
+            this.bookSelect.selectItem(firstVisible);
+        }
+    };
+
+    // =========================================================================
     //  Odn Dialog
     // =========================================================================
     var OdnDialog;
@@ -845,18 +979,11 @@
         OdnDialog.prototype.initialize = function () {
             OdnDialog.super.prototype.initialize.apply(this, arguments);
             this.panel = new OO.ui.PanelLayout({ padded: true, expanded: false });
-            this.filterInput = new OO.ui.TextInputWidget({
-                placeholder: 'Filtruj...',
-                icon: 'search'
-            });
-            this.filterInput.on('change', this._onFilterChange.bind(this));
-            this.bookSelect = new OO.ui.RadioSelectWidget();
-            this.bookSelect.$element.css({ 'max-height': '300px', 'overflow-y': 'auto' });
+            this.selector = new BookSelector();
             this.pageInput = new OO.ui.TextInputWidget({ placeholder: 'Numer strony' });
 
+            this.selector.appendTo(this.panel.$element);
             this.panel.$element.append(
-                new OO.ui.FieldLayout(this.filterInput, { label: 'Szukaj książki', align: 'top' }).$element,
-                new OO.ui.FieldLayout(this.bookSelect, { label: 'Książka', align: 'top' }).$element,
                 new OO.ui.FieldLayout(this.pageInput, { label: 'Strona', align: 'top' }).$element
             );
             this.$body.append(this.panel.$element);
@@ -867,78 +994,34 @@
                 .next(function () {
                     this._surface = data.surface;
                     this._fragment = data.fragment;
-                    this._books = data.books || [];
                     this.pageInput.setValue('');
-                    this.filterInput.setValue('');
-
-                    this._allOptions = this._books.map(function (book, i) {
-                        var label = bookLabel(book);
-                        var searchText = label.toLowerCase();
-                        var chapterAuthors = Object.keys(book).filter(function (key) {
-                            return /^nazwisko r/.test(key);
-                        }).map(function (key) { return book[key].toLowerCase(); });
-                        if (chapterAuthors.length) {
-                            searchText += ' ' + chapterAuthors.join(' ');
-                        }
-                        return {
-                            widget: new OO.ui.RadioOptionWidget({ data: i, label: label }),
-                            label: searchText
-                        };
-                    });
-
-                    this.bookSelect.clearItems();
-                    var widgets = this._allOptions.map(function (o) { return o.widget; });
-                    this.bookSelect.addItems(widgets);
-                    if (widgets.length) {
-                        this.bookSelect.selectItem(widgets[0]);
-                    }
+                    this.selector.setBooks(data.books);
                 }, this);
-        };
-
-        OdnDialog.prototype._onFilterChange = function (value) {
-            var query = value.toLowerCase().trim();
-            var firstVisible = null;
-            var selectedItem = this.bookSelect.findSelectedItem();
-            var selectedHidden = false;
-            this._allOptions.forEach(function (o) {
-                var match = !query || o.label.indexOf(query) !== -1;
-                o.widget.toggle(match);
-                if (match && !firstVisible) {
-                    firstVisible = o.widget;
-                }
-                if (o.widget === selectedItem && !match) {
-                    selectedHidden = true;
-                }
-            });
-            if (firstVisible && (!selectedItem || selectedHidden)) {
-                this.bookSelect.selectItem(firstVisible);
-            }
         };
 
         OdnDialog.prototype.getReadyProcess = function (data) {
             var dialog = this;
             return OdnDialog.super.prototype.getReadyProcess.call(this, data)
                 .next(function () {
-                    setTimeout(function () { dialog.filterInput.focus(); }, 200);
+                    dialog.selector.focus();
                 });
         };
 
         OdnDialog.prototype.getActionProcess = function (action) {
             if (action === 'insert') {
-                var selectedItem = this.bookSelect.findSelectedItem();
-                if (!selectedItem) {
+                var book = this.selector.getSelectedBook();
+                if (!book) {
                     return new OO.ui.Process(function () {
                         return $.Deferred().reject(new OO.ui.Error('Wybierz książkę')).promise();
                     });
                 }
-                var book = this._books[selectedItem.getData()];
                 var page = this.pageInput.getValue();
                 var fragment = this._fragment;
                 return new OO.ui.Process(function () {
                     if (fragment) {
-                        this._endPos = insertOdn(fragment, book, page);
+                        this._endPos = insertAtCursor(fragment, buildReferenceString(book, page));
                     } else {
-                        insertOdnWikiEditor(book, page);
+                        insertAtCursorWikiEditor(buildReferenceString(book, page));
                     }
                     this.close({ action: 'insert' });
                 }, this);
@@ -948,6 +1031,80 @@
 
         OdnDialog.prototype.getTeardownProcess = function (data) {
             return OdnDialog.super.prototype.getTeardownProcess.call(this, data)
+                .first(function () {
+                    this._savedEndPos = this._endPos;
+                    this._endPos = null;
+                }, this);
+        };
+    }
+
+    // =========================================================================
+    //  Inline Ref Dialog — cały szablon cytowania w <ref>, bez bibliografii
+    // =========================================================================
+    var InlineRefDialog;
+    function defineInlineRefDialog() {
+        InlineRefDialog = function (config) {
+            InlineRefDialog.super.call(this, config || {});
+        };
+        OO.inheritClass(InlineRefDialog, OO.ui.ProcessDialog);
+
+        InlineRefDialog.static.name = 'inlineRefDialog';
+        InlineRefDialog.static.title = 'Wstaw przypis z książką';
+        InlineRefDialog.static.size = 'medium';
+        InlineRefDialog.static.actions = [
+            { action: 'insert', label: 'Wstaw', flags: ['primary', 'progressive'] },
+            { label: 'Anuluj', flags: ['safe', 'close'] }
+        ];
+
+        InlineRefDialog.prototype.initialize = function () {
+            InlineRefDialog.super.prototype.initialize.apply(this, arguments);
+            this.panel = new OO.ui.PanelLayout({ padded: true, expanded: false });
+            this.selector = new BookSelector();
+            this.selector.appendTo(this.panel.$element);
+            this.$body.append(this.panel.$element);
+        };
+
+        InlineRefDialog.prototype.getSetupProcess = function (data) {
+            return InlineRefDialog.super.prototype.getSetupProcess.call(this, data)
+                .next(function () {
+                    this._surface = data.surface;
+                    this._fragment = data.fragment;
+                    this.selector.setBooks(data.books);
+                }, this);
+        };
+
+        InlineRefDialog.prototype.getReadyProcess = function (data) {
+            var dialog = this;
+            return InlineRefDialog.super.prototype.getReadyProcess.call(this, data)
+                .next(function () {
+                    dialog.selector.focus();
+                });
+        };
+
+        InlineRefDialog.prototype.getActionProcess = function (action) {
+            if (action === 'insert') {
+                var book = this.selector.getSelectedBook();
+                if (!book) {
+                    return new OO.ui.Process(function () {
+                        return $.Deferred().reject(new OO.ui.Error('Wybierz książkę')).promise();
+                    });
+                }
+                var ref = buildInlineRefString(book);
+                var fragment = this._fragment;
+                return new OO.ui.Process(function () {
+                    if (fragment) {
+                        this._endPos = insertAtCursor(fragment, ref);
+                    } else {
+                        insertAtCursorWikiEditor(ref);
+                    }
+                    this.close({ action: 'insert' });
+                }, this);
+            }
+            return InlineRefDialog.super.prototype.getActionProcess.call(this, action);
+        };
+
+        InlineRefDialog.prototype.getTeardownProcess = function (data) {
+            return InlineRefDialog.super.prototype.getTeardownProcess.call(this, data)
                 .first(function () {
                     this._savedEndPos = this._endPos;
                     this._endPos = null;
@@ -1190,16 +1347,17 @@
         }
     }
 
-    function insertOdn(fragment, book, page) {
-        var odn = buildReferenceString(book, page);
-        var endPos = fragment.getSelection().getRange().from + odn.length;
+    // Wstawia tekst w miejscu kursora (VE, tryb źródłowy) i zwraca pozycję
+    // końca wstawki — dialog przywraca tam kursor po zamknięciu.
+    function insertAtCursor(fragment, text) {
+        var endPos = fragment.getSelection().getRange().from + text.length;
 
         if (codeMirror && codeMirror.isActive) {
             codeMirror.toggle(false);
-            fragment.insertContent(odn);
+            fragment.insertContent(text);
             codeMirror.toggle(true);
         } else {
-            fragment.insertContent(odn);
+            fragment.insertContent(text);
         }
 
         return endPos;
@@ -1423,18 +1581,28 @@
         return '<ref name="' + name + '" details="s. ' + page + '" />';
     }
 
+    // Szablon cytowania bez pól sterujących gadżetu: `odn` wiąże wpis
+    // bibliografii z {{odn}}, `_refName` jest atrybutem znacznika <ref>.
+    function citationTemplate(book) {
+        var tplName = book._templateName || 'Cytuj książkę';
+        var clone = {};
+        Object.keys(book).forEach(function (k) {
+            if (k === 'odn' || k === '_refName') return;
+            clone[k] = book[k];
+        });
+        return stringifyTemplate(tplName, clone);
+    }
+
     function buildReferencesBlock(books) {
         var lines = books.map(function (book) {
-            var tplName = book._templateName || 'Cytuj książkę';
-            // odn/_refName są metadanymi gadżetu, nie chcemy ich w wyjściu
-            var clone = {};
-            Object.keys(book).forEach(function (k) {
-                if (k === 'odn' || k === '_refName') return;
-                clone[k] = book[k];
-            });
-            return '<ref name="' + refName(book) + '">' + stringifyTemplate(tplName, clone) + '</ref>';
+            return '<ref name="' + refName(book) + '">' + citationTemplate(book) + '</ref>';
         });
         return '<references>\n' + lines.join('\n') + (lines.length ? '\n' : '') + '</references>';
+    }
+
+    // Samodzielny przypis: cały szablon w <ref>, bez nazwy i bez {{odn}}.
+    function buildInlineRefString(book) {
+        return '<ref>' + citationTemplate(book) + '</ref>';
     }
 
     function parseSubReferences(source) {
@@ -1780,6 +1948,23 @@
         return parts.join(', ') || 'Wariant';
     }
 
+    // Etykiety płaskiej listy książek: warianty tej samej pozycji (ten sam
+    // bookKey, np. różne rozdziały) dostają dopisek, żeby dało się je odróżnić.
+    function bookOptionLabels(books) {
+        var groups = {};
+        books.forEach(function (book) {
+            var key = bookKey(book);
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(book);
+        });
+        return books.map(function (book) {
+            var group = groups[bookKey(book)];
+            var label = bookLabel(book);
+            if (group.length < 2) return label;
+            return label + ' — ' + variantLabel(book, findDifferingFields(group));
+        });
+    }
+
     function findMatchingVariant(existing, variants, differingFields) {
         for (var i = 0; i < variants.length; i++) {
             var match = true;
@@ -1984,6 +2169,7 @@
         stripLinks: stripLinks,
         findDifferingFields: findDifferingFields,
         variantLabel: variantLabel,
+        bookOptionLabels: bookOptionLabels,
         findMatchingVariant: findMatchingVariant,
         ensureOdn: ensureOdn,
         fixMissingOdn: fixMissingOdn,
@@ -1995,6 +2181,7 @@
         saveSetting: saveSetting,
         refName: refName,
         buildSubRefString: buildSubRefString,
+        buildInlineRefString: buildInlineRefString,
         buildReferencesBlock: buildReferencesBlock,
         parseSubReferences: parseSubReferences,
         insertReferencesSection: insertReferencesSection,

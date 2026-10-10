@@ -1434,6 +1434,71 @@ describe('buildReferencesBlock', () => {
 });
 
 // =========================================================================
+//  buildInlineRefString
+// =========================================================================
+describe('buildInlineRefString', () => {
+    it('wraps the citation template in a plain <ref>', () => {
+        const book = { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', imię: 'Jan', rok: '2020' };
+        expect(api.buildInlineRefString(book)).toBe(
+            '<ref>{{Cytuj książkę |nazwisko=Kowalski |imię=Jan |rok=2020}}</ref>'
+        );
+    });
+
+    it('drops the odn parameter (the anchor is only useful in bibliography mode)', () => {
+        const book = { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', rok: '2020', odn: 'tak' };
+        const result = api.buildInlineRefString(book);
+        expect(result).not.toContain('odn');
+        expect(result).toBe('<ref>{{Cytuj książkę |nazwisko=Kowalski |rok=2020}}</ref>');
+    });
+
+    it('keeps everything else as-is, including nested templates and positional params', () => {
+        const book = api.parseTemplate('{{Cytuj książkę |Kowalski |tytuł=[[Historia]] |odn={{odn/id|Kow|2020}}}}');
+        const result = api.buildInlineRefString(book);
+        expect(result).toBe('<ref>{{Cytuj książkę |Kowalski |tytuł=[[Historia]]}}</ref>');
+    });
+
+    it('defaults the template name to Cytuj książkę', () => {
+        expect(api.buildInlineRefString({ nazwisko: 'X' })).toBe('<ref>{{Cytuj książkę |nazwisko=X}}</ref>');
+    });
+
+    it('preserves the Cytuj pismo template name', () => {
+        const book = { _templateName: 'Cytuj pismo', nazwisko: 'Droszcz', czasopismo: 'Obronność' };
+        expect(api.buildInlineRefString(book)).toContain('{{Cytuj pismo |');
+    });
+});
+
+// =========================================================================
+//  bookOptionLabels
+// =========================================================================
+describe('bookOptionLabels', () => {
+    it('uses the plain book label when there is only one entry per book', () => {
+        const books = [
+            { nazwisko: 'Kowalski', rok: '2020', tytuł: 'Historia' },
+            { nazwisko: 'Nowak', rok: '2019', tytuł: 'Matematyka' }
+        ];
+        expect(api.bookOptionLabels(books)).toEqual([
+            'Kowalski (2020) — Historia',
+            'Nowak (2019) — Matematyka'
+        ]);
+    });
+
+    it('appends the chapter to variants of the same book', () => {
+        const books = [
+            { nazwisko: 'Wimmer', data: '1973', tytuł: 'Wojna', rozdział: 'Bitwa pod Warszawą' },
+            { nazwisko: 'Wimmer', data: '1973', tytuł: 'Wojna', rozdział: 'Kampania 1659' }
+        ];
+        const labels = api.bookOptionLabels(books);
+        expect(labels[0]).toContain('Bitwa pod Warszawą');
+        expect(labels[1]).toContain('Kampania 1659');
+        expect(labels[0]).not.toBe(labels[1]);
+    });
+
+    it('returns an empty array for no books', () => {
+        expect(api.bookOptionLabels([])).toEqual([]);
+    });
+});
+
+// =========================================================================
 //  parseSubReferences
 // =========================================================================
 describe('parseSubReferences', () => {
