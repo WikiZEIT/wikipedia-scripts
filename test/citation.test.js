@@ -377,6 +377,28 @@ describe('buildOdnString', () => {
         const book = { nazwisko: 'Editor', 'nazwisko r': 'Author', rok: '2000', odn: 'b' };
         expect(api.buildOdnString(book)).toBe('{{odn|Author|2000b}}');
     });
+
+    it('includes all chapter authors (Grott/Dudek case)', () => {
+        const book = {
+            nazwisko: 'Grott (red.)', nazwisko2: 'Perłakowski (red.)',
+            'nazwisko r': 'Dudek', 'nazwisko2 r': 'Maszkiewski',
+            data: '2024', odn: 'tak'
+        };
+        expect(api.buildOdnString(book, '55')).toBe('{{odn|Dudek|Maszkiewski|2024|s=55}}');
+    });
+
+    it('orders chapter authors numerically, not lexically', () => {
+        const book = {
+            'nazwisko r': 'A', 'nazwisko2 r': 'B', 'nazwisko3 r': 'C', 'nazwisko4 r': 'D',
+            rok: '2024'
+        };
+        expect(api.buildOdnString(book)).toBe('{{odn|A|B|C|D|2024}}');
+    });
+
+    it('includes all volume authors when no chapter authors are present', () => {
+        const book = { nazwisko: 'Grott', nazwisko2: 'Perłakowski', data: '2024' };
+        expect(api.buildOdnString(book)).toBe('{{odn|Grott|Perłakowski|2024}}');
+    });
 });
 
 // =========================================================================
@@ -517,6 +539,15 @@ describe('variantLabel', () => {
     it('appends chapter author', () => {
         const book = { rozdział: 'Kampania 1659', 'nazwisko r': 'Podhorodecki' };
         expect(api.variantLabel(book, [])).toBe('Kampania 1659 (Podhorodecki)');
+    });
+
+    it('joins multiple chapter authors with a comma', () => {
+        const book = {
+            rozdział: 'Okręg Wołyń Armii Krajowej',
+            'nazwisko r': 'Dudek', 'nazwisko2 r': 'Maszkiewski'
+        };
+        expect(api.variantLabel(book, []))
+            .toBe('Okręg Wołyń Armii Krajowej (Dudek, Maszkiewski)');
     });
 
     it('truncates long chapter names', () => {
@@ -959,6 +990,24 @@ describe('integration: parse source → select books → insert', () => {
         expect(matchIdx).toBe(1);
     });
 
+    it('end-to-end: chapter with two authors (Grott/Dudek case)', () => {
+        const template = '{{Cytuj książkę |nazwisko=Grott (red.) |imię=Olgierd '
+            + '|nazwisko2=Perłakowski (red.) |imię2=Adam |autor link=Olgierd Grott '
+            + '|autor link2=Adam Perłakowski |tytuł=Kresowi żołnierze Armii Krajowej. '
+            + 'Historia – polityka – pamięć |wydawca=[[Muzeum Armii Krajowej im. gen. '
+            + 'Emila Fieldorfa „Nila” w Krakowie]] |miejsce=[[Kraków]] |data=2024 '
+            + '|rozdział=Okręg Wołyń Armii Krajowej |nazwisko r=Dudek |imię r=Tomasz '
+            + '|nazwisko2 r=Maszkiewski |imię2 r=Jakub |isbn=9788383680064 |odn=tak}}';
+        const book = api.parseTemplate(template);
+
+        // {{Cytuj książkę}} buduje kotwicę z obu nazwisk autorów rozdziału.
+        expect(api.buildOdnString(book, '55')).toBe('{{odn|Dudek|Maszkiewski|2024|s=55}}');
+        expect(api.refName(book)).toBe('Grott_red_Perłakowski_red_2024');
+        expect(api.sortKey(book)).toBe('grott (red.)|perłakowski (red.)|2024');
+        expect(api.variantLabel(book, []))
+            .toBe('Okręg Wołyń Armii Krajowej (Dudek, Maszkiewski)');
+    });
+
     it('end-to-end: build odn reference from parsed book', () => {
         const template = '{{Cytuj książkę | nazwisko = Kowalski | rok = 2020 | tytuł = Historia | odn = tak}}';
         const book = api.parseTemplate(template);
@@ -1238,6 +1287,19 @@ describe('sortKey', () => {
     it('falls back to nazwisko r only when no nazwisko is present', () => {
         const book = { 'nazwisko r': 'Herbst', data: '1973' };
         expect(api.sortKey(book)).toBe('herbst|1973');
+    });
+
+    it('does not mix numbered chapter authors into the volume authors', () => {
+        const book = {
+            nazwisko: 'Grott (red.)', nazwisko2: 'Perłakowski (red.)',
+            'nazwisko r': 'Dudek', 'nazwisko2 r': 'Maszkiewski', data: '2024'
+        };
+        expect(api.sortKey(book)).toBe('grott (red.)|perłakowski (red.)|2024');
+    });
+
+    it('falls back to all chapter authors when no nazwisko is present', () => {
+        const book = { 'nazwisko r': 'Dudek', 'nazwisko2 r': 'Maszkiewski', data: '2024' };
+        expect(api.sortKey(book)).toBe('dudek|maszkiewski|2024');
     });
 });
 

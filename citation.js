@@ -15,7 +15,7 @@
  * strona wkazywana w page, powinna zawierać książki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-10-10 21:40:00+0200
+ * @date 2026-10-15 02:20:59+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
@@ -902,9 +902,9 @@
         this._options = this._books.map(function (book, i) {
             // Autorzy rozdziałów nie są w etykiecie, ale mają być wyszukiwalni.
             var searchText = labels[i].toLowerCase();
-            var chapterAuthors = Object.keys(book).filter(function (key) {
-                return /^nazwisko r/.test(key);
-            }).map(function (key) { return book[key].toLowerCase(); });
+            var chapterAuthors = chapterAuthorKeys(book).map(function (key) {
+                return book[key].toLowerCase();
+            });
             if (chapterAuthors.length) {
                 searchText += ' ' + chapterAuthors.join(' ');
             }
@@ -1383,12 +1383,10 @@
                 parts.push(p);
             });
         } else {
-            var rNames = Object.keys(book).filter(function (key) {
-                return /^nazwisko r/.test(key);
-            }).sort();
-            var names = rNames.length ? rNames : Object.keys(book).filter(function (key) {
-                return key.startsWith('nazwisko') && !/^nazwisko r/.test(key);
-            }).sort();
+            // Kotwica {{Cytuj książkę}} z `odn=tak` powstaje z nazwisk autorów
+            // rozdziału, a dopiero w ich braku z nazwisk autorów tomu.
+            var rNames = chapterAuthorKeys(book);
+            var names = rNames.length ? rNames : volumeAuthorKeys(book);
             names.forEach(function (key) {
                 parts.push(book[key]);
             });
@@ -1422,6 +1420,35 @@
     }
 
     /* v8 ignore stop */
+
+    // Autorzy rozdziału mają w {{Cytuj książkę}} sufiks " r" po numerze:
+    // `nazwisko r`, `nazwisko2 r`, ... — numer jest w środku nazwy pola,
+    // więc nie da się ich odsiać samym prefiksem.
+    var CHAPTER_AUTHOR_RE = /^nazwisko\d* r$/;
+
+    // Numer nazwiska w szablonie; pole bez numeru (`nazwisko`) jest pierwsze.
+    function authorNumber(key) {
+        var num = key.match(/^nazwisko(\d+)/);
+        return num ? parseInt(num[1], 10) : 1;
+    }
+
+    function byAuthorNumber(a, b) {
+        return authorNumber(a) - authorNumber(b);
+    }
+
+    // Nazwiska autorów rozdziału, w kolejności z szablonu.
+    function chapterAuthorKeys(book) {
+        return Object.keys(book).filter(function (key) {
+            return CHAPTER_AUTHOR_RE.test(key);
+        }).sort(byAuthorNumber);
+    }
+
+    // Nazwiska autorów/redaktorów całego tomu, w kolejności z szablonu.
+    function volumeAuthorKeys(book) {
+        return Object.keys(book).filter(function (key) {
+            return key.indexOf('nazwisko') === 0 && !CHAPTER_AUTHOR_RE.test(key);
+        }).sort(byAuthorNumber);
+    }
 
     function bookKey(book) {
         if (book._positional) {
@@ -1462,13 +1489,9 @@
         // W bibliografii sortujemy po nazwisku redaktora/autora tomu (`nazwisko`),
         // a nie autora rozdziału (`nazwisko r`), żeby pozycja "Wimmer (red.)"
         // znalazła się przy literze W, nie przy autorze rozdziału.
-        var nKeys = Object.keys(book).filter(function (k) {
-            return k.indexOf('nazwisko') === 0 && !/^nazwisko r/.test(k);
-        }).sort();
+        var nKeys = volumeAuthorKeys(book);
         if (!nKeys.length) {
-            nKeys = Object.keys(book).filter(function (k) {
-                return /^nazwisko r/.test(k);
-            }).sort();
+            nKeys = chapterAuthorKeys(book);
         }
         var parts = nKeys.map(function (k) { return book[k]; });
         var year = book.rok || book.data || '';
@@ -1541,13 +1564,9 @@
         if (odnId) {
             return sanitizeRefName(odnId[1].split('|').join('_'));
         }
-        var nKeys = Object.keys(book).filter(function (k) {
-            return k.indexOf('nazwisko') === 0 && !/^nazwisko r/.test(k);
-        }).sort();
+        var nKeys = volumeAuthorKeys(book);
         if (!nKeys.length) {
-            nKeys = Object.keys(book).filter(function (k) {
-                return /^nazwisko r/.test(k);
-            }).sort();
+            nKeys = chapterAuthorKeys(book);
         }
         var parts = nKeys.map(function (k) { return book[k]; });
         // Brak pól nazwisko/imię (np. tylko `autor`) — użyj nazwisk z `autor`,
@@ -1934,9 +1953,11 @@
         if (book['rozdział']) {
             var label = stripLinks(book['rozdział']);
             if (label.length > 60) label = label.slice(0, 57) + '...';
-            var chapterAuthor = book['nazwisko r'];
-            if (chapterAuthor) {
-                label += ' (' + chapterAuthor + ')';
+            var authors = chapterAuthorKeys(book).map(function (key) {
+                return book[key];
+            });
+            if (authors.length) {
+                label += ' (' + authors.join(', ') + ')';
             }
             return label;
         }
