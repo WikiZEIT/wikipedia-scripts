@@ -15,7 +15,7 @@
  * strona wkazywana w page, powinna zawierać książki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-10-15 02:20:59+0200
+ * @date 2026-10-17 22:00:21+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
@@ -1021,9 +1021,15 @@
 
         OdnDialog.prototype.initialize = function () {
             OdnDialog.super.prototype.initialize.apply(this, arguments);
+            var dialog = this;
             this.panel = new OO.ui.PanelLayout({ padded: true, expanded: false });
             this.selector = new BookSelector();
             this.pageInput = new OO.ui.TextInputWidget({ placeholder: 'Numer strony' });
+            // Enter w numerze strony wstawia odnośnik — numer jest ostatnią
+            // rzeczą do podania, więc nie trzeba już sięgać po przycisk.
+            this.pageInput.on('enter', function () {
+                dialog.executeAction('insert');
+            });
 
             this.selector.appendTo(this.panel.$element);
             this.panel.$element.append(
