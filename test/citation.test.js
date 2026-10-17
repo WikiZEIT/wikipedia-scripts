@@ -1003,7 +1003,7 @@ describe('integration: parse source → select books → insert', () => {
         // {{Cytuj książkę}} buduje kotwicę z obu nazwisk autorów rozdziału.
         expect(api.buildOdnString(book, '55')).toBe('{{odn|Dudek|Maszkiewski|2024|s=55}}');
         expect(api.refName(book)).toBe('Grott_red_Perłakowski_red_2024');
-        expect(api.sortKey(book)).toBe('grott (red.)|perłakowski (red.)|2024');
+        expect(api.sortKey(book)).toBe('grott (red.)|perłakowski (red.)|2024|okręg wołyń armii krajowej');
         expect(api.variantLabel(book, []))
             .toBe('Okręg Wołyń Armii Krajowej (Dudek, Maszkiewski)');
     });
@@ -1533,9 +1533,15 @@ describe('sortKey', () => {
         expect(api.sortKey(book)).toBe('wimmer2018|rozdz. 3');
     });
 
-    it('appends variant letter suffix from odn (a/b/c) to year', () => {
+    it('ignores the odn letter, which is assigned after sorting', () => {
         const book = { nazwisko: 'Kowalski', rok: '2020', odn: 'a' };
-        expect(api.sortKey(book)).toBe('kowalski|2020a');
+        expect(api.sortKey(book)).toBe('kowalski|2020');
+    });
+
+    it('breaks ties between chapters of one book on the chapter name', () => {
+        const lwow = { nazwisko: 'Grott (red.)', data: '2024', rozdział: 'Okręg (Obszar) Lwów Armii Krajowej' };
+        const tarnopol = { nazwisko: 'Grott (red.)', data: '2024', rozdział: 'Okręg Tarnopol Armii Krajowej' };
+        expect(api.sortKey(lwow) < api.sortKey(tarnopol)).toBe(true);
     });
 
     it('prefers nazwisko (volume editor) over nazwisko r (chapter author)', () => {
@@ -1605,6 +1611,31 @@ describe('sortBooks', () => {
         ];
         const sorted = api.sortBooks(books);
         expect(sorted.map(b => b.nazwisko)).toEqual(['Adamski', 'Ćwirko', 'Łabęcki', 'Żak']);
+    });
+
+    it('orders chapters of one book alphabetically', () => {
+        const chapter = (name) => ({ nazwisko: 'Grott (red.)', data: '2024', rozdział: name, 'nazwisko r': 'Dudek' });
+        const books = [
+            chapter('Okręg Tarnopol Armii Krajowej'),
+            chapter('Okręg (Obszar) Lwów Armii Krajowej'),
+            chapter('Okręg Stanisławów Armii Krajowej')
+        ];
+        expect(api.sortBooks(books).map(b => b['rozdział'])).toEqual([
+            'Okręg (Obszar) Lwów Armii Krajowej',
+            'Okręg Stanisławów Armii Krajowej',
+            'Okręg Tarnopol Armii Krajowej'
+        ]);
+    });
+
+    it('sorting then lettering runs odn=a, b, c down the list', () => {
+        const chapter = (name) => ({ nazwisko: 'Grott (red.)', data: '2024', rozdział: name, 'nazwisko r': 'Dudek', odn: 'tak' });
+        const books = api.sortBooks([
+            chapter('Okręg Tarnopol Armii Krajowej'),
+            chapter('Okręg (Obszar) Lwów Armii Krajowej'),
+            chapter('Okręg Stanisławów Armii Krajowej')
+        ]);
+        api.assignOdnLetters(books);
+        expect(books.map(b => b.odn)).toEqual(['a', 'b', 'c']);
     });
 
     it('handles an empty array', () => {

@@ -696,10 +696,11 @@
                 var mainBooks = selectedBooks.map(cloneBook);
                 carryOverOdnLetters(mainBooks, this._existingMain);
                 mainBooks.forEach(function (book) { ensureOdn(book); });
-                assignOdnLetters(mainBooks);
                 if (this.sortCheckbox.isSelected()) {
                     mainBooks = sortBooks(mainBooks);
                 }
+                // Po sortowaniu, żeby litery szły w kolejności wpisów.
+                assignOdnLetters(mainBooks);
                 return new OO.ui.Process(function () {
                     if (surface) {
                         updateBibliography(surface, mainBooks);
@@ -1552,11 +1553,13 @@
         var parts = nKeys.map(function (k) { return book[k]; });
         var year = book.rok || book.data || '';
         if (year) {
-            var odn = book.odn || '';
-            if (odn && odn !== 'tak' && /^[a-z]$/i.test(odn)) {
-                year += odn;
-            }
             parts.push(year);
+        }
+        // Litera rozróżniająca nie bierze udziału w sortowaniu — nadajemy ją
+        // dopiero po ułożeniu wpisów, żeby szła a, b, c w dół listy. Rozdziały
+        // tej samej książki rozstrzygamy ich tytułem.
+        if (book['rozdział']) {
+            parts.push(stripLinks(book['rozdział']));
         }
         return parts.join('|').toLowerCase();
     }
