@@ -1008,6 +1008,47 @@ describe('integration: parse source → select books → insert', () => {
             .toBe('Okręg Wołyń Armii Krajowej (Dudek, Maszkiewski)');
     });
 
+    it('end-to-end: two chapters by the same author get odn=a / odn=b and survive a re-save', () => {
+        const chapter = (name) => '{{Cytuj książkę |nazwisko=Grott (red.) |imię=Olgierd '
+            + '|nazwisko2=Perłakowski (red.) |imię2=Adam |tytuł=Kresowi żołnierze Armii Krajowej '
+            + '|miejsce=[[Kraków]] |data=2024 |rozdział=' + name + ' |nazwisko r=Dudek '
+            + '|imię r=Tomasz |isbn=9788383680064 |odn=tak}}';
+        const sourceBooks = [
+            api.parseTemplate(chapter('Okręg (Obszar) Lwów Armii Krajowej')),
+            api.parseTemplate(chapter('Okręg Stanisławów Armii Krajowej')),
+            api.parseTemplate(chapter('Okręg Tarnopol Armii Krajowej'))
+        ];
+
+        // Pierwszy zapis: użytkownik zaznacza dwa rozdziały tej samej książki.
+        const firstPick = [sourceBooks[0], sourceBooks[1]].map(b => Object.assign({}, b));
+        api.assignOdnLetters(firstPick);
+        expect(firstPick.map(b => b.odn)).toEqual(['a', 'b']);
+        expect(api.buildOdnString(firstPick[0], '92')).toBe('{{odn|Dudek|2024a|s=92}}');
+        expect(api.buildOdnString(firstPick[1], '173')).toBe('{{odn|Dudek|2024b|s=173}}');
+
+        const article = api.insertBibliographySection(
+            'Tekst{{odn|Dudek|2024b|s=173}}.\n\n[[Kategoria:Test]]',
+            api.buildBibEntries(firstPick)
+        );
+        expect(article).toContain('|odn=a}}');
+        expect(article).toContain('|odn=b}}');
+
+        // Strona źródłowa zostaje nietknięta.
+        expect(sourceBooks.map(b => b.odn)).toEqual(['tak', 'tak', 'tak']);
+
+        // Drugi zapis: dochodzi trzeci rozdział, litery się nie przesuwają.
+        const existing = api.parseExistingBibliography(article).main;
+        const secondPick = sourceBooks.map(b => Object.assign({}, b));
+        api.carryOverOdnLetters(secondPick, existing);
+        api.assignOdnLetters(secondPick);
+        expect(secondPick.map(b => b.odn)).toEqual(['a', 'b', 'c']);
+
+        // Odnośnik już obecny w treści dalej trafia w ten sam rozdział.
+        const stanislawow = secondPick[1];
+        expect(stanislawow['rozdział']).toBe('Okręg Stanisławów Armii Krajowej');
+        expect(api.buildOdnString(stanislawow, '173')).toBe('{{odn|Dudek|2024b|s=173}}');
+    });
+
     it('end-to-end: build odn reference from parsed book', () => {
         const template = '{{Cytuj książkę | nazwisko = Kowalski | rok = 2020 | tytuł = Historia | odn = tak}}';
         const book = api.parseTemplate(template);
@@ -1109,6 +1150,224 @@ describe('fixMissingOdn', () => {
         expect(result.books[0].odn).toBe('k');
         expect(result.books[1].odn).toBe('{{odn/id|X|2020}}');
         expect(result.books[2].odn).toBe('tak');
+    });
+});
+
+// =========================================================================
+//  readAllBibliography
+// =========================================================================
+describe('readAllBibliography', () => {
+    const chapterEntry = (name, odn) => '* {{Cytuj książkę |nazwisko=Grott (red.) '
+        + '|tytuł=Kresowi żołnierze |data=2024 |rozdział=' + name
+        + ' |nazwisko r=Dudek |odn=' + odn + '}}';
+
+    it('keeps both chapters of the same book as separate entries', () => {
+        const article = [
+            'Tekst.',
+            '',
+            '== Bibliografia ==',
+            chapterEntry('Okręg (Obszar) Lwów Armii Krajowej', 'a'),
+            chapterEntry('Okręg Stanisławów Armii Krajowej', 'b')
+        ].join('\n');
+        const result = api.readAllBibliography(article);
+        expect(result.main.map(b => b.odn)).toEqual(['a', 'b']);
+        expect(result.main.map(b => b['rozdział'])).toEqual([
+            'Okręg (Obszar) Lwów Armii Krajowej',
+            'Okręg Stanisławów Armii Krajowej'
+        ]);
+    });
+
+    it('still collapses the same entry parsed from both formats', () => {
+        const article = [
+            'Tekst<ref name="Dudek_2024">{{Cytuj książkę |nazwisko=Grott (red.) '
+                + '|tytuł=Kresowi żołnierze |data=2024 |rozdział=Okręg Lwów |nazwisko r=Dudek}}</ref>',
+            '',
+            '== Bibliografia ==',
+            '* {{Cytuj książkę |nazwisko=Grott (red.) |tytuł=Kresowi żołnierze |data=2024 '
+                + '|rozdział=Okręg Lwów |nazwisko r=Dudek |odn=tak}}'
+        ].join('\n');
+        expect(api.readAllBibliography(article).main).toHaveLength(1);
+    });
+});
+
+// =========================================================================
+//  odnKey
+// =========================================================================
+describe('odnKey', () => {
+    it('is equal for two chapters sharing the chapter author and year', () => {
+        const lwow = { nazwisko: 'Grott (red.)', rozdział: 'Lwów', 'nazwisko r': 'Dudek', data: '2024' };
+        const stanislawow = { nazwisko: 'Grott (red.)', rozdział: 'Stanisławów', 'nazwisko r': 'Dudek', data: '2024' };
+        expect(api.odnKey(lwow)).toBe(api.odnKey(stanislawow));
+    });
+
+    it('differs when the chapter authors differ', () => {
+        const dudek = { nazwisko: 'Grott (red.)', 'nazwisko r': 'Dudek', data: '2024' };
+        const kordas = { nazwisko: 'Grott (red.)', 'nazwisko r': 'Kordas', data: '2024' };
+        expect(api.odnKey(dudek)).not.toBe(api.odnKey(kordas));
+    });
+
+    it('differs when one chapter has a second author', () => {
+        const solo = { nazwisko: 'Grott (red.)', 'nazwisko r': 'Dudek', data: '2024' };
+        const duo = { nazwisko: 'Grott (red.)', 'nazwisko r': 'Dudek', 'nazwisko2 r': 'Maszkiewski', data: '2024' };
+        expect(api.odnKey(solo)).not.toBe(api.odnKey(duo));
+    });
+
+    it('falls back to volume authors when there is no chapter author', () => {
+        expect(api.odnKey({ nazwisko: 'Kowalski', rok: '2020' })).toBe('kowalski|2020');
+    });
+
+    it('ignores the disambiguating letter', () => {
+        const a = { nazwisko: 'Kowalski', rok: '2020', odn: 'a' };
+        const b = { nazwisko: 'Kowalski', rok: '2020', odn: 'b' };
+        expect(api.odnKey(a)).toBe(api.odnKey(b));
+    });
+
+    it('uses the custom {{odn/id}} anchor when present', () => {
+        const book = { nazwisko: 'Kowalski', rok: '2020', odn: '{{odn/id|ABC|2020}}' };
+        expect(api.odnKey(book)).toBe('abc|2020');
+    });
+});
+
+// =========================================================================
+//  assignOdnLetters
+// =========================================================================
+describe('assignOdnLetters', () => {
+    it('assigns a and b to two chapters sharing an anchor (Dudek case)', () => {
+        const books = [
+            { nazwisko: 'Grott (red.)', rozdział: 'Lwów', 'nazwisko r': 'Dudek', data: '2024', odn: 'tak' },
+            { nazwisko: 'Grott (red.)', rozdział: 'Stanisławów', 'nazwisko r': 'Dudek', data: '2024', odn: 'tak' }
+        ];
+        api.assignOdnLetters(books);
+        expect(books.map(b => b.odn)).toEqual(['a', 'b']);
+    });
+
+    it('leaves unique anchors as odn = tak', () => {
+        const books = [
+            { nazwisko: 'Grott (red.)', rozdział: 'Wilno', 'nazwisko r': 'Chudzicka', data: '2024', odn: 'tak' },
+            { nazwisko: 'Grott (red.)', rozdział: 'Grodno', 'nazwisko r': 'Kordas', data: '2024', odn: 'tak' }
+        ];
+        api.assignOdnLetters(books);
+        expect(books.map(b => b.odn)).toEqual(['tak', 'tak']);
+    });
+
+    it('letters only the colliding chapters, not every chapter of the book', () => {
+        const books = [
+            { nazwisko: 'Grott (red.)', rozdział: 'Wilno', 'nazwisko r': 'Chudzicka', data: '2024', odn: 'tak' },
+            { nazwisko: 'Grott (red.)', rozdział: 'Lwów', 'nazwisko r': 'Dudek', data: '2024', odn: 'tak' },
+            { nazwisko: 'Grott (red.)', rozdział: 'Stanisławów', 'nazwisko r': 'Dudek', data: '2024', odn: 'tak' },
+            { nazwisko: 'Grott (red.)', rozdział: 'Wołyń', 'nazwisko r': 'Dudek', 'nazwisko2 r': 'Maszkiewski', data: '2024', odn: 'tak' }
+        ];
+        api.assignOdnLetters(books);
+        expect(books.map(b => b.odn)).toEqual(['tak', 'a', 'b', 'tak']);
+    });
+
+    it('keeps letters that are already assigned and fills the gaps', () => {
+        const books = [
+            { nazwisko: 'Kowalski', rok: '2020', odn: 'b' },
+            { nazwisko: 'Kowalski', rok: '2020', odn: 'tak' },
+            { nazwisko: 'Kowalski', rok: '2020', odn: 'tak' }
+        ];
+        api.assignOdnLetters(books);
+        expect(books.map(b => b.odn)).toEqual(['b', 'a', 'c']);
+    });
+
+    it('letters same-author duplicates that have no chapter at all', () => {
+        const books = [
+            { nazwisko: 'Kowalski', rok: '2020', tytuł: 'Historia' },
+            { nazwisko: 'Kowalski', rok: '2020', tytuł: 'Geografia' }
+        ];
+        api.assignOdnLetters(books);
+        expect(books.map(b => b.odn)).toEqual(['a', 'b']);
+    });
+
+    it('never touches a book with a custom {{odn/id}} anchor', () => {
+        const books = [
+            { nazwisko: 'Kowalski', rok: '2020', odn: '{{odn/id|ABC|2020}}' },
+            { nazwisko: 'Kowalski', rok: '2020', odn: 'tak' }
+        ];
+        api.assignOdnLetters(books);
+        expect(books.map(b => b.odn)).toEqual(['{{odn/id|ABC|2020}}', 'tak']);
+    });
+
+    it('runs out of letters gracefully past z', () => {
+        const books = [];
+        for (let i = 0; i < 28; i++) {
+            books.push({ nazwisko: 'Kowalski', rok: '2020', odn: 'tak' });
+        }
+        api.assignOdnLetters(books);
+        expect(books[25].odn).toBe('z');
+        expect(books[26].odn).toBe('tak');
+        expect(books[27].odn).toBe('tak');
+    });
+
+    it('produces distinct {{odn}} references for the lettered entries', () => {
+        const books = [
+            { nazwisko: 'Grott (red.)', rozdział: 'Lwów', 'nazwisko r': 'Dudek', data: '2024', odn: 'tak' },
+            { nazwisko: 'Grott (red.)', rozdział: 'Stanisławów', 'nazwisko r': 'Dudek', data: '2024', odn: 'tak' }
+        ];
+        api.assignOdnLetters(books);
+        expect(api.buildOdnString(books[0], '92')).toBe('{{odn|Dudek|2024a|s=92}}');
+        expect(api.buildOdnString(books[1], '173')).toBe('{{odn|Dudek|2024b|s=173}}');
+    });
+});
+
+// =========================================================================
+//  carryOverOdnLetters
+// =========================================================================
+describe('carryOverOdnLetters', () => {
+    const sourceVariant = (chapter) => ({
+        nazwisko: 'Grott (red.)', tytuł: 'Kresowi żołnierze',
+        rozdział: chapter, 'nazwisko r': 'Dudek', data: '2024', odn: 'tak'
+    });
+
+    it('moves the letter from the article entry onto the matching chapter', () => {
+        const selected = [sourceVariant('Lwów'), sourceVariant('Stanisławów')];
+        const existing = [
+            Object.assign(sourceVariant('Stanisławów'), { odn: 'b' }),
+            Object.assign(sourceVariant('Lwów'), { odn: 'a' })
+        ];
+        api.carryOverOdnLetters(selected, existing);
+        expect(selected.map(b => b.odn)).toEqual(['a', 'b']);
+    });
+
+    it('keeps the article letters stable when a third chapter is added', () => {
+        const selected = [sourceVariant('Lwów'), sourceVariant('Stanisławów'), sourceVariant('Tarnopol')];
+        const existing = [
+            Object.assign(sourceVariant('Lwów'), { odn: 'a' }),
+            Object.assign(sourceVariant('Stanisławów'), { odn: 'b' })
+        ];
+        api.carryOverOdnLetters(selected, existing);
+        api.assignOdnLetters(selected);
+        expect(selected.map(b => b.odn)).toEqual(['a', 'b', 'c']);
+    });
+
+    it('does not move a letter onto a different chapter', () => {
+        const selected = [sourceVariant('Tarnopol')];
+        const existing = [Object.assign(sourceVariant('Lwów'), { odn: 'a' })];
+        api.carryOverOdnLetters(selected, existing);
+        expect(selected[0].odn).toBe('tak');
+    });
+
+    it('ignores article entries without a disambiguating letter', () => {
+        const selected = [sourceVariant('Lwów')];
+        const existing = [sourceVariant('Lwów')];
+        api.carryOverOdnLetters(selected, existing);
+        expect(selected[0].odn).toBe('tak');
+    });
+
+    it('carries over a custom {{odn/id}} anchor', () => {
+        const selected = [{ nazwisko: 'Kowalski', rok: '2020', tytuł: 'H', odn: 'tak' }];
+        const existing = [{ nazwisko: 'Kowalski', rok: '2020', tytuł: 'H', odn: '{{odn/id|ABC|2020}}' }];
+        api.carryOverOdnLetters(selected, existing);
+        expect(selected[0].odn).toBe('{{odn/id|ABC|2020}}');
+    });
+
+    it('matches on the chapter even when the group already has mixed odn values', () => {
+        const selected = [sourceVariant('Lwów'), sourceVariant('Stanisławów')];
+        selected[0].odn = 'a';
+        const existing = [Object.assign(sourceVariant('Stanisławów'), { odn: 'b' })];
+        api.carryOverOdnLetters(selected, existing);
+        expect(selected.map(b => b.odn)).toEqual(['a', 'b']);
     });
 });
 

@@ -331,10 +331,11 @@
         var seen = {};
         var main = [];
         // Wpisy sub-ref mają pierwszeństwo (są w nowym formacie); duplikaty
-        // dedupujemy po kluczu książki, żeby migracja z odn nie pokazała
-        // tej samej książki dwa razy.
+        // dedupujemy po kluczu wpisu, żeby migracja z odn nie pokazała
+        // tej samej książki dwa razy. Klucz obejmuje rozdział — dwa rozdziały
+        // tej samej książki to osobne pozycje bibliografii.
         subref.concat(legacy.main).forEach(function (b) {
-            var k = bookKey(b);
+            var k = entryKey(b);
             if (!seen[k]) {
                 seen[k] = true;
                 main.push(b);
@@ -438,6 +439,7 @@
 
                     var existingMain = data.existingMain || [];
                     var existingNested = data.existingNested || [];
+                    this._existingMain = existingMain;
 
                     var articleFix = fixMissingOdn(existingMain);
                     this._odnArticleCount = articleFix.count;
@@ -519,36 +521,66 @@
                             var variants = entry.variants;
                             var diffFields = findDifferingFields(variants);
                             var label = bookLabel(variants[0]);
+
+                            // Każdy rozdział obecny już w bibliografii zostaje
+                            // zaznaczony — inaczej zapis usunąłby wszystkie
+                            // poza jednym.
+                            var preselected = {};
+                            if (isMain) {
+                                existingMain.forEach(function (eb) {
+                                    if (bookKey(eb) !== key) return;
+                                    var matchIdx = findMatchingVariant(eb, variants, diffFields);
+                                    if (matchIdx !== -1) {
+                                        preselected[matchIdx] = true;
+                                    }
+                                });
+                            }
+                            if (isExisting && !Object.keys(preselected).length) {
+                                preselected[0] = true;
+                            }
+
                             var checkbox = new OO.ui.CheckboxInputWidget({
                                 selected: isExisting,
                                 disabled: isNested
                             });
 
-                            var options = variants.map(function (v, i) {
-                                return { data: String(i), label: variantLabel(v, diffFields) };
-                            });
-                            var variantSelect = new OO.ui.DropdownInputWidget({
-                                options: options,
-                                value: '0',
-                                $overlay: self.$overlay
+                            var $variants = $('<div>').css({ margin: '0.25em 0 0.5em 1.5em' });
+                            var variantBoxes = variants.map(function (v, i) {
+                                var box = new OO.ui.CheckboxInputWidget({
+                                    selected: !!preselected[i],
+                                    disabled: isNested
+                                });
+                                var variantField = new OO.ui.FieldLayout(box, {
+                                    label: variantLabel(v, diffFields),
+                                    align: 'inline'
+                                });
+                                $variants.append(variantField.$element);
+                                return box;
                             });
 
-                            if (isMain) {
-                                var matchingExisting = existingMain.filter(function (eb) {
-                                    return bookKey(eb) === key;
+                            function anyVariantSelected() {
+                                return variantBoxes.some(function (box) {
+                                    return box.isSelected();
                                 });
-                                if (matchingExisting.length) {
-                                    var matchIdx = findMatchingVariant(matchingExisting[0], variants, diffFields);
-                                    if (matchIdx !== -1) {
-                                        variantSelect.setValue(String(matchIdx));
-                                    }
-                                }
                             }
 
-                            variantSelect.$element.css({ margin: '0.5em 0 0.5em 1.5em', 'max-width': 'calc(100% - 1.5em)' });
-                            variantSelect.$element.toggle(checkbox.isSelected());
+                            $variants.toggle(checkbox.isSelected());
+                            // setSelected(…, true) nie emituje zdarzenia, więc
+                            // nadrzędny i podrzędne pola nie zapętlają się.
                             checkbox.on('change', function (selected) {
-                                variantSelect.$element.toggle(selected);
+                                $variants.toggle(selected);
+                                if (selected && !anyVariantSelected()) {
+                                    variantBoxes[0].setSelected(true, true);
+                                } else if (!selected) {
+                                    variantBoxes.forEach(function (box) {
+                                        box.setSelected(false, true);
+                                    });
+                                }
+                            });
+                            variantBoxes.forEach(function (box) {
+                                box.on('change', function () {
+                                    checkbox.setSelected(anyVariantSelected(), true);
+                                });
                             });
 
                             var field = new OO.ui.FieldLayout(checkbox, {
@@ -557,7 +589,7 @@
                             });
 
                             var $container = $('<div>').addClass('oo-ui-layout oo-ui-fieldLayout');
-                            $container.append(field.$element, variantSelect.$element);
+                            $container.append(field.$element, $variants);
 
                             var variantLabels = variants.map(function (v) {
                                 return variantLabel(v, diffFields);
@@ -567,7 +599,7 @@
                                 checkbox: checkbox,
                                 book: variants[0],
                                 variants: variants,
-                                variantSelect: variantSelect,
+                                variantBoxes: variantBoxes,
                                 isNested: isNested,
                                 label: label.toLowerCase() + ' ' + variantLabels,
                                 $field: $container
@@ -643,19 +675,28 @@
 
         BibliographyDialog.prototype.getActionProcess = function (action) {
             if (action === 'save') {
-                var mainBooks = this._checkboxes
-                    .filter(function (item) { return item.checkbox.isSelected() && !item.isNested; })
-                    .map(function (item) {
-                        if (item.variants && item.variantSelect) {
-                            var idx = parseInt(item.variantSelect.getValue(), 10);
-                            return item.variants[idx];
-                        }
-                        return item.book;
-                    });
+                var selectedBooks = [];
+                this._checkboxes.forEach(function (item) {
+                    if (item.isNested || !item.checkbox.isSelected()) return;
+                    if (item.variantBoxes) {
+                        item.variants.forEach(function (variant, i) {
+                            if (item.variantBoxes[i].isSelected()) {
+                                selectedBooks.push(variant);
+                            }
+                        });
+                    } else {
+                        selectedBooks.push(item.book);
+                    }
+                });
                 var surface = this._surface;
                 var odnArticleCount = this._odnArticleCount;
-                var odnSourceCount = mainBooks.filter(function (book) { return book._odnMissing; }).length;
+                var odnSourceCount = selectedBooks.filter(function (book) { return book._odnMissing; }).length;
+                // Kopie, bo `odn` ustawiane niżej dotyczy tego artykułu —
+                // wpisy na stronie źródłowej zostają z `odn=tak`.
+                var mainBooks = selectedBooks.map(cloneBook);
+                carryOverOdnLetters(mainBooks, this._existingMain);
                 mainBooks.forEach(function (book) { ensureOdn(book); });
+                assignOdnLetters(mainBooks);
                 if (this.sortCheckbox.isSelected()) {
                     mainBooks = sortBooks(mainBooks);
                 }
@@ -1450,6 +1491,14 @@
         }).sort(byAuthorNumber);
     }
 
+    function cloneBook(book) {
+        var copy = {};
+        Object.keys(book).forEach(function (key) {
+            copy[key] = book[key];
+        });
+        return copy;
+    }
+
     function bookKey(book) {
         if (book._positional) {
             return book._positional.join('|').toLowerCase();
@@ -1458,6 +1507,13 @@
         var year = (book.rok || '').trim();
         var title = (book.tytuł || '').toLowerCase().trim();
         return author + '|' + year + '|' + title;
+    }
+
+    // `bookKey` zbiera warianty jednej pozycji w grupę; `entryKey` rozróżnia
+    // je w obrębie grupy, bo każdy rozdział jest osobnym wpisem bibliografii
+    // i osobnym celem dla {{odn}}.
+    function entryKey(book) {
+        return bookKey(book) + '|' + (book['rozdział'] || '').toLowerCase().trim();
     }
 
     function stripLinks(text) {
@@ -2116,6 +2172,124 @@
         return { books: result, count: count };
     }
 
+    var ODN_LETTERS = 'abcdefghijklmnopqrstuvwxyz';
+
+    function odnLetter(book) {
+        var odn = book.odn || '';
+        return /^[a-z]$/i.test(odn) ? odn.toLowerCase() : '';
+    }
+
+    function hasCustomOdn(book) {
+        return /\{\{odn\/id\|/.test(book.odn || '');
+    }
+
+    // Tożsamość kotwicy, którą {{Cytuj książkę}} tworzy z `odn`: nazwiska
+    // autorów rozdziału (a w ich braku autorów tomu) plus rok — bez litery
+    // rozróżniającej. Dwa wpisy o tym samym kluczu dają w artykule ten sam
+    // identyfikator, więc {{odn}} nie wie, na który wskazać. Rozdział nie
+    // wchodzi do kotwicy, dlatego sam w sobie wpisów nie rozróżnia.
+    function odnKey(book) {
+        if (book._positional) {
+            return book._positional.join('|').toLowerCase();
+        }
+        var odnId = book.odn && book.odn.match(/\{\{odn\/id\|([^}]+)\}\}/);
+        if (odnId) {
+            return odnId[1].toLowerCase();
+        }
+        var nKeys = chapterAuthorKeys(book);
+        if (!nKeys.length) {
+            nKeys = volumeAuthorKeys(book);
+        }
+        var parts = nKeys.map(function (key) { return book[key]; });
+        var year = book.rok || book.data || '';
+        if (year) {
+            parts.push(year);
+        }
+        return parts.join('|').toLowerCase();
+    }
+
+    // Nadaje `odn=a`, `odn=b`, ... wpisom, które dzielą kotwicę. Litery już
+    // obecne zostają nietknięte, bo artykuł odwołuje się do nich w treści.
+    function assignOdnLetters(books) {
+        var groups = {};
+        books.forEach(function (book) {
+            if (hasCustomOdn(book)) return;
+            var key = odnKey(book);
+            if (!key) return;
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(book);
+        });
+
+        Object.keys(groups).forEach(function (key) {
+            var group = groups[key];
+            if (group.length < 2) return;
+
+            var taken = {};
+            group.forEach(function (book) {
+                var letter = odnLetter(book);
+                if (letter) taken[letter] = true;
+            });
+
+            var next = 0;
+            group.forEach(function (book) {
+                if (odnLetter(book)) return;
+                while (next < ODN_LETTERS.length && taken[ODN_LETTERS[next]]) {
+                    next++;
+                }
+                // Po wyczerpaniu liter wpis zostaje z `odn=tak`; o kolizji
+                // mówi wtedy ostrzeżenie o duplikatach.
+                if (next >= ODN_LETTERS.length) return;
+                book.odn = ODN_LETTERS[next];
+                taken[ODN_LETTERS[next]] = true;
+            });
+        });
+
+        return books;
+    }
+
+    // Pola rozróżniające warianty tej samej pozycji. `odn` jest pomijany —
+    // to jego wartość przenosimy — a `rozdział` dokładany zawsze, żeby
+    // litera nie trafiła na inny rozdział tej samej książki.
+    function variantFields(books, existing) {
+        var fields = findDifferingFields(books).filter(function (field) {
+            return field !== 'odn';
+        });
+        var hasChapter = (existing && existing['rozdział']) || books.some(function (book) {
+            return !!book['rozdział'];
+        });
+        if (hasChapter && fields.indexOf('rozdział') === -1) {
+            fields.push('rozdział');
+        }
+        return fields;
+    }
+
+    // Litera rozróżniająca należy do artykułu, nie do strony źródłowej (tam
+    // wszystkie wpisy mają `odn=tak`). Przy ponownym zapisie bibliografii
+    // trzeba ją przenieść z wpisu w artykule na wybrany wpis źródłowy,
+    // inaczej {{odn|Dudek|2024b}} w treści przestanie trafiać w bibliografię.
+    function carryOverOdnLetters(books, existingBooks) {
+        if (!existingBooks || !existingBooks.length) return books;
+
+        var groups = {};
+        books.forEach(function (book) {
+            var key = bookKey(book);
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(book);
+        });
+
+        existingBooks.forEach(function (existing) {
+            if (!odnLetter(existing) && !hasCustomOdn(existing)) return;
+            var group = groups[bookKey(existing)];
+            if (!group) return;
+            var idx = findMatchingVariant(existing, group, variantFields(group, existing));
+            if (idx !== -1) {
+                group[idx].odn = existing.odn;
+            }
+        });
+
+        return books;
+    }
+
     function findDuplicateBooks(books) {
         var groups = {};
         books.forEach(function (book) {
@@ -2187,6 +2361,8 @@
         detectInsertLevel: detectInsertLevel,
         findEndOfArticlePos: findEndOfArticlePos,
         bookKey: bookKey,
+        entryKey: entryKey,
+        readAllBibliography: readAllBibliography,
         bookLabel: bookLabel,
         stripLinks: stripLinks,
         findDifferingFields: findDifferingFields,
@@ -2195,6 +2371,9 @@
         findMatchingVariant: findMatchingVariant,
         ensureOdn: ensureOdn,
         fixMissingOdn: fixMissingOdn,
+        odnKey: odnKey,
+        assignOdnLetters: assignOdnLetters,
+        carryOverOdnLetters: carryOverOdnLetters,
         findDuplicateBooks: findDuplicateBooks,
         buildOdnNotification: buildOdnNotification,
         sortKey: sortKey,
