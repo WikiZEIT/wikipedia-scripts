@@ -15,7 +15,7 @@
  * strona wkazywana w page, powinna zawierać książki używające szablonów {{Cytuj ...}}
  *
  * @author [[w:pl:User:Jcubic]]
- * @date 2026-10-17 22:00:21+0200
+ * @date 2026-10-24 10:41:26+0200
  */
 (() => {
     /* v8 ignore start -- GUI initialization and editor integration */
@@ -27,6 +27,18 @@
     let codeMirror;
 
     initAPI();
+
+    // Nazwa parametru z numerem strony, osobno dla każdego szablonu
+    // cytowania. Szablon spoza tej mapy nie dostaje numeru strony — okno
+    // przypisu nie pokazuje wtedy tego pola.
+    const pageParams = {
+        'Cytuj': 's',
+        'Cytuj książkę': 'strony',
+        'Cytuj pismo': 'strony',
+        'Cytuj stronę': 'strony'
+    };
+
+    const DEFAULT_TEMPLATE = 'Cytuj książkę';
 
     const citationHelper = window.citationHelper || {};
 
@@ -974,6 +986,12 @@
         setTimeout(function () { input.focus(); }, 200);
     };
 
+    // Zmiana wyboru — także ta wymuszona filtrowaniem — decyduje o tym, czy
+    // okno pokazuje pole numeru strony.
+    BookSelector.prototype.onSelect = function (handler) {
+        this.bookSelect.on('select', handler);
+    };
+
     BookSelector.prototype.appendTo = function ($element) {
         $element.append(
             new OO.ui.FieldLayout(this.filterInput, { label: 'Szukaj książki', align: 'top' }).$element,
@@ -1107,10 +1125,33 @@
 
         InlineRefDialog.prototype.initialize = function () {
             InlineRefDialog.super.prototype.initialize.apply(this, arguments);
+            var dialog = this;
             this.panel = new OO.ui.PanelLayout({ padded: true, expanded: false });
             this.selector = new BookSelector();
+            this.pageInput = new OO.ui.TextInputWidget({ placeholder: 'Numer strony' });
+            this.pageField = new OO.ui.FieldLayout(this.pageInput, { label: 'Strona', align: 'top' });
+            this.pageInput.on('enter', function () {
+                dialog.executeAction('insert');
+            });
+            this.selector.onSelect(function () {
+                dialog._updatePageField();
+            });
+
             this.selector.appendTo(this.panel.$element);
+            this.panel.$element.append(this.pageField.$element);
             this.$body.append(this.panel.$element);
+        };
+
+        // Pole strony ma sens tylko dla szablonów z mapy `pageParams` —
+        // dla pozostałych nie ma dokąd wstawić numeru.
+        InlineRefDialog.prototype._updatePageField = function () {
+            var book = this.selector.getSelectedBook();
+            var supported = !!(book && pageParam(book));
+            if (!supported) {
+                this.pageInput.setValue('');
+            }
+            this.pageField.toggle(supported);
+            this.updateSize();
         };
 
         InlineRefDialog.prototype.getSetupProcess = function (data) {
@@ -1118,7 +1159,9 @@
                 .next(function () {
                     this._surface = data.surface;
                     this._fragment = data.fragment;
+                    this.pageInput.setValue('');
                     this.selector.setBooks(data.books);
+                    this._updatePageField();
                 }, this);
         };
 
@@ -1138,7 +1181,7 @@
                         return $.Deferred().reject(new OO.ui.Error('Wybierz książkę')).promise();
                     });
                 }
-                var ref = buildInlineRefString(book);
+                var ref = buildInlineRefString(book, this.pageInput.getValue().trim());
                 var fragment = this._fragment;
                 return new OO.ui.Process(function () {
                     if (fragment) {
@@ -1668,13 +1711,32 @@
 
     // Szablon cytowania bez pól sterujących gadżetu: `odn` wiąże wpis
     // bibliografii z {{odn}}, `_refName` jest atrybutem znacznika <ref>.
-    function citationTemplate(book) {
-        var tplName = book._templateName || 'Cytuj książkę';
+    // Nazwa szablonu tak, jak zapisano ją w wikitekście: wielkość pierwszej
+    // litery, podkreślenia i zwielokrotnione spacje nie mają znaczenia.
+    function templateName(book) {
+        var name = (book._templateName || DEFAULT_TEMPLATE)
+            .replace(/_/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        return name.charAt(0).toUpperCase() + name.slice(1);
+    }
+
+    function pageParam(book) {
+        var name = templateName(book);
+        return Object.prototype.hasOwnProperty.call(pageParams, name) ? pageParams[name] : '';
+    }
+
+    function citationTemplate(book, page) {
+        var tplName = book._templateName || DEFAULT_TEMPLATE;
         var clone = {};
         Object.keys(book).forEach(function (k) {
             if (k === 'odn' || k === '_refName') return;
             clone[k] = book[k];
         });
+        var param = pageParam(book);
+        if (page && param) {
+            clone[param] = page;
+        }
         return stringifyTemplate(tplName, clone);
     }
 
@@ -1686,8 +1748,8 @@
     }
 
     // Samodzielny przypis: cały szablon w <ref>, bez nazwy i bez {{odn}}.
-    function buildInlineRefString(book) {
-        return '<ref>' + citationTemplate(book) + '</ref>';
+    function buildInlineRefString(book, page) {
+        return '<ref>' + citationTemplate(book, page) + '</ref>';
     }
 
     function parseSubReferences(source) {
@@ -2392,6 +2454,7 @@
         refName: refName,
         buildSubRefString: buildSubRefString,
         buildInlineRefString: buildInlineRefString,
+        pageParam: pageParam,
         buildReferencesBlock: buildReferencesBlock,
         parseSubReferences: parseSubReferences,
         insertReferencesSection: insertReferencesSection,

@@ -1817,6 +1817,75 @@ describe('buildInlineRefString', () => {
         const book = { _templateName: 'Cytuj pismo', nazwisko: 'Droszcz', czasopismo: 'Obronność' };
         expect(api.buildInlineRefString(book)).toContain('{{Cytuj pismo |');
     });
+
+    it('adds the page under the parameter the template uses', () => {
+        const book = { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', rok: '2020' };
+        expect(api.buildInlineRefString(book, '55')).toBe(
+            '<ref>{{Cytuj książkę |nazwisko=Kowalski |rok=2020 |strony=55}}</ref>'
+        );
+    });
+
+    it('uses s= for the universal Cytuj template', () => {
+        const book = { _templateName: 'Cytuj', nazwisko: 'Kowalski', rok: '2020' };
+        expect(api.buildInlineRefString(book, '55')).toBe(
+            '<ref>{{Cytuj |nazwisko=Kowalski |rok=2020 |s=55}}</ref>'
+        );
+    });
+
+    it('uses strony= for Cytuj pismo', () => {
+        const book = { _templateName: 'Cytuj pismo', czasopismo: 'Obronność' };
+        expect(api.buildInlineRefString(book, '12')).toContain('|strony=12}}');
+    });
+
+    it('omits the page for a template missing from the mapping', () => {
+        const book = { _templateName: 'Cytuj grę komputerową', tytuł: 'Gra' };
+        expect(api.buildInlineRefString(book, '55')).toBe(
+            '<ref>{{Cytuj grę komputerową |tytuł=Gra}}</ref>'
+        );
+    });
+
+    it('ignores an empty page', () => {
+        const book = { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski' };
+        expect(api.buildInlineRefString(book, '')).toBe('<ref>{{Cytuj książkę |nazwisko=Kowalski}}</ref>');
+    });
+
+    it('replaces a page already present in the source entry', () => {
+        const book = { _templateName: 'Cytuj książkę', nazwisko: 'Kowalski', strony: '10-20' };
+        expect(api.buildInlineRefString(book, '55')).toBe(
+            '<ref>{{Cytuj książkę |nazwisko=Kowalski |strony=55}}</ref>'
+        );
+    });
+
+    it('applies the default template name when the book has none', () => {
+        expect(api.buildInlineRefString({ nazwisko: 'X' }, '7')).toBe(
+            '<ref>{{Cytuj książkę |nazwisko=X |strony=7}}</ref>'
+        );
+    });
+});
+
+// =========================================================================
+//  pageParam
+// =========================================================================
+describe('pageParam', () => {
+    it('maps the known citation templates', () => {
+        expect(api.pageParam({ _templateName: 'Cytuj' })).toBe('s');
+        expect(api.pageParam({ _templateName: 'Cytuj książkę' })).toBe('strony');
+        expect(api.pageParam({ _templateName: 'Cytuj pismo' })).toBe('strony');
+    });
+
+    it('returns an empty string for an unmapped template', () => {
+        expect(api.pageParam({ _templateName: 'Cytuj grę komputerową' })).toBe('');
+    });
+
+    it('defaults to Cytuj książkę when the book has no template name', () => {
+        expect(api.pageParam({ nazwisko: 'X' })).toBe('strony');
+    });
+
+    it('tolerates the wikitext spellings of a template name', () => {
+        expect(api.pageParam({ _templateName: 'cytuj książkę' })).toBe('strony');
+        expect(api.pageParam({ _templateName: 'Cytuj_książkę' })).toBe('strony');
+        expect(api.pageParam({ _templateName: '  Cytuj  książkę  ' })).toBe('strony');
+    });
 });
 
 // =========================================================================
